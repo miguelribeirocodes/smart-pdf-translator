@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+.env
+examples/output/*.pdf
+app/storage/
+*.egg-info/
+.pytest_cache/
+.DS_Store

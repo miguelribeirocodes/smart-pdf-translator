@@ -1,0 +1,10 @@
+[project]
+name = "tradutor-pdf"
+version = "0.1.0"
+description = "Ferramenta de traducao de PDF com preservacao de layout (Fase 0 - traducao crua)"
+requires-python = ">=3.10"
+authors = [{name = "Miguel Ribeiro"}]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["src*", "app*"]
