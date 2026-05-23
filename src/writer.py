@@ -185,41 +185,67 @@ def write_translated_pdf(
                 color     = _int_color_to_rgb(span.color)
                 font_size = span.size
 
-                # Bbox ligeiramente expandida para absorver expansao de texto
+                # Draw rect: usa o espaco disponivel ate o fim da linha,
+                # nunca ultrapassando a margem direita da pagina.
+                # Isso resolve o Problema 1 (expansao horizontal arbitraria
+                # que causava overflow fora da pagina).
+                page_w    = span.page_w if span.page_w > 0 else page.rect.width
+                line_x1   = span.line_x1 if span.line_x1 > rect.x1 else rect.x1
+                right_cap = page_w - 30          # margem de seguranca de 30pt
+                draw_right = min(line_x1 + 5, right_cap)
+                # Garante ao menos a largura original do span
+                draw_right = max(draw_right, rect.x1)
+
                 draw_rect = pymupdf.Rect(
                     rect.x0,
                     rect.y0 - 1.0,
-                    rect.x1 + max(60, (rect.x1 - rect.x0) * 0.4),
+                    draw_right,
                     rect.y1 + 2.0,
                 )
 
+                # Reducao de fonte em 3 passos rapidos antes de iterar fino:
+                # tenta 90%, 80%, 70% do tamanho original, depois -0.5pt ate 6pt.
                 inserted = -1
-                while font_size >= 4.0:
+                size_candidates = [
+                    font_size,
+                    round(font_size * 0.90, 1),
+                    round(font_size * 0.80, 1),
+                    round(font_size * 0.70, 1),
+                ]
+                for fs in size_candidates:
+                    if fs < 6.0:
+                        break
                     inserted = page.insert_textbox(
-                        draw_rect,
-                        translation,
-                        fontname=fontname,
-                        fontsize=font_size,
-                        color=color,
-                        align=0,   # esquerda
-                        overlay=True,
+                        draw_rect, translation,
+                        fontname=fontname, fontsize=fs,
+                        color=color, align=0, overlay=True,
                     )
                     if inserted >= 0:
+                        font_size = fs
                         break
-                    font_size -= 0.5
+
+                # Se ainda nao coube, descida fina de 0.5pt ate 6pt
+                if inserted < 0:
+                    font_size = round(size_candidates[-1], 1)
+                    while font_size >= 6.0:
+                        font_size -= 0.5
+                        inserted = page.insert_textbox(
+                            draw_rect, translation,
+                            fontname=fontname, fontsize=font_size,
+                            color=color, align=0, overlay=True,
+                        )
+                        if inserted >= 0:
+                            break
 
                 if inserted < 0:
+                    # Ultimo recurso: 6pt forcado (melhor que 4pt ilegivel)
                     page.insert_textbox(
-                        draw_rect,
-                        translation,
-                        fontname=fontname,
-                        fontsize=4.0,
-                        color=color,
-                        align=0,
-                        overlay=True,
+                        draw_rect, translation,
+                        fontname=fontname, fontsize=6.0,
+                        color=color, align=0, overlay=True,
                     )
                     log.warning(
-                        "Span pagina %s nao coube nem em 4pt: %r",
+                        "Span pagina %s nao coube nem em 6pt: %r",
                         page_idx,
                         translation[:60],
                     )

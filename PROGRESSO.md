@@ -12,7 +12,7 @@
 
 **Última sessão:** 2026-05-23 (Sessão #3). Problema 2 (fontes/"?") totalmente resolvido e validado com PDF real. Zero "?" no documento inteiro. Bullets e en-dashes renderizando corretamente.
 
-**Próximo bloco de trabalho:** Problema 1 (expansão de texto — texto saindo da bbox) ou Problema 3 (agrupamento de parágrafos — qualidade de tradução). Ambos adequados para Sonnet. Ver seção de decisões para orientação sobre Opus vs Sonnet.
+**Próximo bloco de trabalho:** Problema 3 (agrupamento de parágrafos) — reagrupar spans em blocos lógicos antes de traduzir, melhorando coerência do texto traduzido. Sonnet.
 
 ---
 
@@ -89,7 +89,7 @@
 
 #### Fase 1 — atacar os 5 problemas (ATUAL)
 - [x] **Problema 2: Fontes sem charset Unicode** — ✅ resolvido (Sessão #2/3). NotoSans via `pymupdf-fonts` elimina "?" de acentos. Fix adicional no `translator.py`: protect/restore de `–`, `•`, `'`, `"`, `©`, `°` etc. antes de enviar ao Google Translate (que os malhava para `?`). Spans com apenas símbolos/números pulam a tradução.
-- [ ] **Problema 1: Expansão de texto** — ajuste de fonte mais inteligente, quebra de linha
+- [x] **Problema 1: Expansão de texto** — ✅ resolvido (Sessão #4). `extractor.py`: adicionado `line_x1` e `page_w` ao TextSpan. `writer.py`: draw_rect usa espaço real da linha + cap na margem da página (30pt). Redução de fonte em 3 passos (90/80/70%) antes da descida fina. Mínimo de 6pt (era 4pt). 229 overflows → 0.
 - [ ] **Problema 3: Granularidade de blocos** — reagrupar spans em parágrafos lógicos antes de traduzir
 - [ ] **Problema 4: Cabeçalhos/rodapés/tabelas** — detecção heurística e tratamento especial
 - [ ] **Problema 5: Glossário técnico** — sistema de termos protegidos (JSON/YAML por projeto)
@@ -206,6 +206,13 @@ Paths sem acentos, ambiente Windows.
 ---
 
 ## Histórico de sessões
+
+### Sessão #4 — 2026-05-23
+- Problema 1 (expansão de texto): extractor.py recebe line_x1 e page_w por span; writer.py usa espaço real da linha como draw_rect, capeia na margem (page_w - 30pt).
+- Redução de fonte: 3 passos rápidos (90/80/70%) antes da descida fina; mínimo 6pt (era 4pt).
+- Resultado: 229 overflows → 0. Layout validado visualmente.
+- Nota técnica: Write tool gera UTF-16 no mount Windows — arquivos precisam ser reescritos pelo bash em UTF-8 quando editados pelo sandbox.
+- Próximo: Problema 3 (agrupamento de parágrafos).
 
 ### Sessão #3 — 2026-05-23
 - Problema 2 (fontes): substituídas fontes base14 (Latin-1) por NotoSans via `pymupdf-fonts`.
