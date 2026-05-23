@@ -10,9 +10,9 @@
 
 **Fase atual:** Fase 1 — Qualidade de tradução e robustez.
 
-**Última sessão:** 2026-05-23 (Sessão #2). Fase 0 validada com PDF real de 42 páginas (Google Translate). Resultado: layout, logos e tabelas 100% preservados. Problema visível: caracteres especiais renderizados como "?" (Problema 2 — fontes). Observações de produto coletadas do Miguel (ver seção de decisões).
+**Última sessão:** 2026-05-23 (Sessão #3). Problema 2 (fontes/"?") totalmente resolvido e validado com PDF real. Zero "?" no documento inteiro. Bullets e en-dashes renderizando corretamente.
 
-**Próximo bloco de trabalho:** Problema 1 (expansão de texto) ou Problema 3 (agrupamento de parágrafos) — a definir com Miguel após validação do fix de "?" com Google Translate real.
+**Próximo bloco de trabalho:** Problema 1 (expansão de texto — texto saindo da bbox) ou Problema 3 (agrupamento de parágrafos — qualidade de tradução). Ambos adequados para Sonnet. Ver seção de decisões para orientação sobre Opus vs Sonnet.
 
 ---
 
@@ -27,6 +27,22 @@
 | Recuperação de jobs | Não previsto | **Jobs devem persistir para o usuário mesmo se fechar o browser** — arquivo fica salvo temporariamente na conta; job roda em background; usuário pode recuperar pelo histórico de jobs. | Miguel: "demorou pra traduzir, é importante ter forma de recuperar". Implementar em Fase 2/3 quando houver auth real. |
 | Modelo de cobrança | Créditos ou planos | **Modelo de créditos** — vender créditos em pacotes fixos; cada tradução consome 1 crédito; crédito só é descontado se a tradução completar sem erros. | Miguel definiu. Implementar quando chegar em Fase 3 (billing real). |
 | Detecção de PDF escaneado | Mensagem clara ou OCR | **Pré-análise obrigatória antes de traduzir** — detectar se PDF é texto puro ou imagem; negar tradução se for escaneado (ou raster), com mensagem clara ao usuário. OCR (Tesseract) como opção futura. | Miguel levantou. Já existe warning no pipeline; falta bloquear na API e mostrar erro amigável na UI. Implementar na Fase 2. |
+
+---
+
+## Orientação: Sonnet vs Opus
+
+| Tarefa | Modelo recomendado | Motivo |
+|---|---|---|
+| Problema 1 — expansão de texto (ajuste de bbox, font-size) | **Sonnet** | Engenharia direta, sem ambiguidade |
+| Problema 2 — fontes Unicode | ~~Sonnet~~ ✅ concluído | — |
+| Problema 3 — agrupamento de parágrafos | **Sonnet** (início) → avaliar Opus | Heurística moderada; se a detecção de blocos lógicos ficar complexa, escalar para Opus |
+| Problema 4 — cabeçalhos/rodapés/tabelas | **Sonnet** | Detecção por posição e heurística |
+| Problema 5 — glossário técnico | **Sonnet** | CRUD de JSON/YAML |
+| Arquitetura de produto (Fase 3 — decisão A/B/C) | **Opus** | Decisão estratégica de alto impacto |
+| Auth + Billing real | **Sonnet** | Implementação padrão |
+
+**Resumo:** Sonnet dá conta de toda a Fase 1. Só escalar para Opus quando chegar em decisões arquiteturais/estratégicas de produto (Fase 3) ou se o Problema 3 virar algo realmente complexo.
 
 ---
 
@@ -195,7 +211,9 @@ Paths sem acentos, ambiente Windows.
 - Problema 2 (fontes): substituídas fontes base14 (Latin-1) por NotoSans via `pymupdf-fonts`.
 - `src/writer.py` refatorado: detecta bold/italic e usa variante correta (notos/notosbo/notosit/notosbi). Fallback gracioso para base14 se o pacote não estiver instalado.
 - `requirements.txt` atualizado com `pymupdf-fonts>=1.0.5`.
-- Validado visualmente: zero "?" no output, acentos e caracteres especiais renderizando corretamente.
+- Fix adicional em `src/translator.py`: protect/restore de `–`, `•`, `'`, `"`, `©`, `°` etc. — Google Translate malhava esses chars para `?`. Spans com apenas símbolos/números pulam a tradução. NBSP normalizado para espaço normal.
+- **Validado com Google Translate real (PDF 25 págs):** zero "?" no documento inteiro. Bullets e en-dashes renderizando corretamente.
+- Critério de aceitação do Problema 2: ✅ ATINGIDO.
 - Próximo: Problema 1 (expansão de texto) ou Problema 3 (agrupamento de parágrafos).
 
 ### Sessão #2 — 2026-05-23
