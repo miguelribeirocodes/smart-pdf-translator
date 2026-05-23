@@ -1,5 +1,6 @@
 # Core PDF manipulation
 pymupdf>=1.24.0
+pymupdf-fonts>=1.0.5   # NotoSans e outras fontes com cobertura Unicode completa
 
 # Free translation backends (no API key required)
 deep-translator>=1.11.4

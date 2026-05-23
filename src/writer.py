@@ -2,63 +2,122 @@
 Writer: reescreve spans traduzidos in-place no PDF original.
 
 Fase 0 (CRUA):
-- Apaga o texto original com redact_annot (cor de fundo branca por default)
-  e escreve o novo texto na mesma bbox usando insert_textbox.
-- Sem ajuste fino de fonte/tamanho. Se o texto traduzido nao couber, sera
-  truncado ou ficara sobre o limite da bbox -> esse e o "Problema 1" do
-  briefing, tratado em fases posteriores.
-- Sem substituicao inteligente de fonte. Usamos uma fonte segura (helv) com
-  suporte a Latin-1 para garantir que acentos rendem -> "Problema 2" tratado
-  parcialmente aqui usando fallback, mas sem manter a fonte original.
+- Apaga o texto original cobrindo com retangulo branco e escreve o novo
+  texto na mesma bbox usando insert_textbox.
+- Usa NotoSans (via pymupdf-fonts) em vez das fontes base14 para garantir
+  cobertura Unicode completa -- elimina os "?" que surgiam com helv/hebo.
+- Se o texto traduzido nao couber na bbox original, reduz o tamanho da fonte
+  progressivamente ate caber ou atingir 4pt (minimo).
 
 Estrategia anti-quebra-de-layout:
-- Pintamos um retangulo branco sobre o texto antigo (em vez de redact_annot,
-  que pode remover imagens proximas).
-- Inserimos o novo texto com PyMuPDF insert_textbox, alinhamento esquerdo,
-  font_size = min(original_size, ajuste se nao couber).
+- Pintamos um retangulo branco sobre o texto antigo (draw_rect).
+- Inserimos o novo texto com insert_textbox, alinhamento esquerdo.
+- A bbox de escrita e ligeiramente expandida horizontalmente para absorver
+  a expansao tipica de texto traduzido (Problema 1 do briefing, tratamento
+  minimo; solucao completa na Fase 1).
+
+Sobre as fontes:
+- pymupdf-fonts (pip install pymupdf-fonts) fornece NotoSans com ~3246
+  glifos cobrindo Latin, Cirilico, Grego, Hebraico, Arabico, CJK basico, etc.
+- Registramos as 4 variantes (regular, bold, italic, bold-italic) uma vez
+  por documento para evitar registros duplicados por pagina.
 """
 from __future__ import annotations
 
 import logging
-from typing import Iterable, List, Tuple
+from typing import Dict, List, Tuple
 
 import pymupdf
+
+try:
+    import pymupdf_fonts as _mf
+    _FONT_BUFFERS: Dict[str, bytes] = {
+        "notos":   _mf.fontbuffers["notos"],    # NotoSans Regular
+        "notosbo": _mf.fontbuffers["notosbo"],  # NotoSans Bold
+        "notosit": _mf.fontbuffers["notosit"],  # NotoSans Italic
+        "notosbi": _mf.fontbuffers["notosbi"],  # NotoSans Bold Italic
+    }
+    _HAS_NOTO = True
+except Exception:  # noqa: BLE001
+    _FONT_BUFFERS = {}
+    _HAS_NOTO = False
 
 from .extractor import TextSpan
 
 log = logging.getLogger(__name__)
 
+if not _HAS_NOTO:
+    log.warning(
+        "pymupdf-fonts nao encontrado. Usando fontes base14 (Latin-1 apenas). "
+        "Instale com: pip install pymupdf-fonts"
+    )
 
-# Mapa de fontes do PDF original para fontes "seguras" do PyMuPDF
-# (base14, sempre disponiveis e com Latin-1).
-FONT_MAP = {
-    # Calibri / Arial families -> Helvetica
-    "default": "helv",
-    "bold": "hebo",
-    "italic": "heit",
+# Nomes internos das fontes Noto registradas no documento
+_NOTO_REGULAR     = "notos"
+_NOTO_BOLD        = "notosbo"
+_NOTO_ITALIC      = "notosit"
+_NOTO_BOLD_ITALIC = "notosbi"
+
+# Fallback base14 se pymupdf-fonts nao estiver disponivel
+_BASE14 = {
+    "regular":     "helv",
+    "bold":        "hebo",
+    "italic":      "heit",
     "bold_italic": "hebi",
 }
 
 
-def _pick_safe_font(span: TextSpan) -> str:
-    """Mapeia a fonte original para uma fonte segura do PyMuPDF."""
+def _pick_font_variant(span: TextSpan) -> str:
+    """Retorna o nome da variante de fonte (chave do dicionario interno)."""
     flags = span.flags
-    is_bold = bool(flags & 16) or "bold" in span.font.lower() or "-bd" in span.font.lower()
-    is_italic = bool(flags & 2) or "italic" in span.font.lower() or "oblique" in span.font.lower()
+    is_bold   = bool(flags & 16) or "bold"    in span.font.lower() or "-bd" in span.font.lower()
+    is_italic = bool(flags & 2)  or "italic"  in span.font.lower() or "oblique" in span.font.lower()
     if is_bold and is_italic:
-        return FONT_MAP["bold_italic"]
+        return "bold_italic"
     if is_bold:
-        return FONT_MAP["bold"]
+        return "bold"
     if is_italic:
-        return FONT_MAP["italic"]
-    return FONT_MAP["default"]
+        return "italic"
+    return "regular"
+
+
+def _variant_to_fontname(variant: str) -> str:
+    """Converte variante para o nome de fonte a usar no insert_textbox."""
+    if _HAS_NOTO:
+        return {
+            "regular":     _NOTO_REGULAR,
+            "bold":        _NOTO_BOLD,
+            "italic":      _NOTO_ITALIC,
+            "bold_italic": _NOTO_BOLD_ITALIC,
+        }[variant]
+    return _BASE14[variant]
 
 
 def _int_color_to_rgb(c: int) -> Tuple[float, float, float]:
     r = ((c >> 16) & 0xFF) / 255.0
-    g = ((c >> 8) & 0xFF) / 255.0
-    b = (c & 0xFF) / 255.0
+    g = ((c >> 8)  & 0xFF) / 255.0
+    b = (c & 0xFF)          / 255.0
     return (r, g, b)
+
+
+def _register_noto_fonts(doc: pymupdf.Document) -> None:
+    """
+    Pre-registra as 4 variantes NotoSans no documento uma unica vez.
+    PyMuPDF deduplica automaticamente por xref; chamadas extras sao no-op.
+    """
+    if not _HAS_NOTO:
+        return
+    # Registrar em todas as paginas seria caro; PyMuPDF aceita registrar
+    # numa pagina e referenciar nas demais desde que o fontname seja igual.
+    # Usamos a pagina 0 como ancora; se o doc for vazio, nao faz nada.
+    if len(doc) == 0:
+        return
+    page0 = doc[0]
+    for fname, buf in _FONT_BUFFERS.items():
+        try:
+            page0.insert_font(fontname=fname, fontbuffer=buf)
+        except Exception as e:  # noqa: BLE001
+            log.debug("Nao foi possivel pre-registrar fonte %s: %s", fname, e)
 
 
 def write_translated_pdf(
@@ -71,21 +130,24 @@ def write_translated_pdf(
     Aplica `translations[i]` no lugar de `spans[i].text` no PDF de saida.
 
     Args:
-        input_pdf: caminho do PDF original.
-        output_pdf: caminho onde salvar o PDF traduzido.
-        spans: lista produzida por extractor.extract_spans().
+        input_pdf:    caminho do PDF original.
+        output_pdf:   caminho onde salvar o PDF traduzido.
+        spans:        lista produzida por extractor.extract_spans().
         translations: lista paralela com o texto traduzido de cada span.
     """
     if len(spans) != len(translations):
         raise ValueError(
             f"Spans ({len(spans)}) e translations ({len(translations)}) "
-            f"precisam ter o mesmo tamanho."
+            "precisam ter o mesmo tamanho."
         )
 
     doc = pymupdf.open(input_pdf)
 
     try:
-        # Agrupa spans por pagina para minimizar acesso a paginas
+        # Registra fontes Noto uma vez antes de percorrer as paginas
+        _register_noto_fonts(doc)
+
+        # Agrupa spans por pagina
         by_page: dict[int, list[tuple[TextSpan, str]]] = {}
         for span, translation in zip(spans, translations):
             by_page.setdefault(span.page, []).append((span, translation))
@@ -93,32 +155,37 @@ def write_translated_pdf(
         for page_idx, items in by_page.items():
             page = doc[page_idx]
 
-            # 1) Apagar o texto original cobrindo cada bbox com retangulo branco.
-            #    (redact_annot e mais limpo, mas pode afetar imagens proximas)
-            for span, translation in items:
-                if translation == span.text:
-                    continue  # nada a fazer
-                rect = pymupdf.Rect(span.bbox)
-                # Pequeno padding para evitar artefatos de borda
-                rect = pymupdf.Rect(
-                    rect.x0 - 0.5, rect.y0 - 0.5, rect.x1 + 0.5, rect.y1 + 0.5
-                )
-                page.draw_rect(rect, color=None, fill=(1, 1, 1), overlay=True)
+            # Garante que as fontes Noto estao registradas nesta pagina
+            if _HAS_NOTO:
+                for fname, buf in _FONT_BUFFERS.items():
+                    try:
+                        page.insert_font(fontname=fname, fontbuffer=buf)
+                    except Exception:  # noqa: BLE001
+                        pass  # ja registrada ou erro nao-critico
 
-            # 2) Escrever texto traduzido sobre o retangulo branco
+            # 1) Cobrir o texto original com retangulo branco
             for span, translation in items:
                 if translation == span.text:
                     continue
                 rect = pymupdf.Rect(span.bbox)
-                fontname = _pick_safe_font(span)
-                color = _int_color_to_rgb(span.color)
+                rect = pymupdf.Rect(
+                    rect.x0 - 0.5, rect.y0 - 0.5,
+                    rect.x1 + 0.5, rect.y1 + 0.5,
+                )
+                page.draw_rect(rect, color=None, fill=(1, 1, 1), overlay=True)
 
-                # Tenta usar o tamanho original; se nao couber, reduz
-                # progressivamente ate caber ou atingir tamanho minimo.
+            # 2) Escrever texto traduzido
+            for span, translation in items:
+                if translation == span.text:
+                    continue
+
+                rect      = pymupdf.Rect(span.bbox)
+                variant   = _pick_font_variant(span)
+                fontname  = _variant_to_fontname(variant)
+                color     = _int_color_to_rgb(span.color)
                 font_size = span.size
-                inserted = -1
-                # Aumenta a largura util ligeiramente para acomodar expansao
-                # de texto (Problema 1 do briefing, tratamento minimo).
+
+                # Bbox ligeiramente expandida para absorver expansao de texto
                 draw_rect = pymupdf.Rect(
                     rect.x0,
                     rect.y0 - 1.0,
@@ -126,6 +193,7 @@ def write_translated_pdf(
                     rect.y1 + 2.0,
                 )
 
+                inserted = -1
                 while font_size >= 4.0:
                     inserted = page.insert_textbox(
                         draw_rect,
@@ -133,7 +201,7 @@ def write_translated_pdf(
                         fontname=fontname,
                         fontsize=font_size,
                         color=color,
-                        align=0,  # left
+                        align=0,   # esquerda
                         overlay=True,
                     )
                     if inserted >= 0:
@@ -141,7 +209,6 @@ def write_translated_pdf(
                     font_size -= 0.5
 
                 if inserted < 0:
-                    # Ainda nao coube: forca insercao com 4pt
                     page.insert_textbox(
                         draw_rect,
                         translation,
@@ -157,7 +224,6 @@ def write_translated_pdf(
                         translation[:60],
                     )
 
-        # Salva com garbage=4 (limpa objetos nao usados) e deflate=True
         doc.save(output_pdf, garbage=4, deflate=True)
     finally:
         doc.close()

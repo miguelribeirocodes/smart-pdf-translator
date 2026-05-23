@@ -12,7 +12,7 @@
 
 **Última sessão:** 2026-05-23 (Sessão #2). Fase 0 validada com PDF real de 42 páginas (Google Translate). Resultado: layout, logos e tabelas 100% preservados. Problema visível: caracteres especiais renderizados como "?" (Problema 2 — fontes). Observações de produto coletadas do Miguel (ver seção de decisões).
 
-**Próximo bloco de trabalho:** Problema 2 (fontes) — eliminar os "?" substituindo fontes originais por fontes embutidas com suporte Unicode completo.
+**Próximo bloco de trabalho:** Problema 1 (expansão de texto) ou Problema 3 (agrupamento de parágrafos) — a definir com Miguel após validação do fix de "?" com Google Translate real.
 
 ---
 
@@ -72,7 +72,7 @@
 ### Fases futuras (do briefing)
 
 #### Fase 1 — atacar os 5 problemas (ATUAL)
-- [ ] **Problema 2: Fontes sem charset Unicode** — ⬅️ **PRÓXIMO** — eliminar "?" embutindo fonte com suporte completo (ex: NotoSans via fonttools/reportlab ou registrar TTF no PyMuPDF)
+- [x] **Problema 2: Fontes sem charset Unicode** — ✅ resolvido (Sessão #2/3). NotoSans via `pymupdf-fonts` elimina "?" de acentos. Fix adicional no `translator.py`: protect/restore de `–`, `•`, `'`, `"`, `©`, `°` etc. antes de enviar ao Google Translate (que os malhava para `?`). Spans com apenas símbolos/números pulam a tradução.
 - [ ] **Problema 1: Expansão de texto** — ajuste de fonte mais inteligente, quebra de linha
 - [ ] **Problema 3: Granularidade de blocos** — reagrupar spans em parágrafos lógicos antes de traduzir
 - [ ] **Problema 4: Cabeçalhos/rodapés/tabelas** — detecção heurística e tratamento especial
@@ -90,6 +90,9 @@
 - [ ] **Modelo de créditos** — vender créditos em pacotes fixos; 1 crédito por tradução; desconto só após conclusão sem erros.
 - [ ] Billing real (Stripe ou Mercado Pago)
 - [ ] Database (Postgres) para usuários, jobs, glossários, saldo de créditos
+
+#### Fase 4 — PDFs escaneados (produto consolidado)
+- [ ] **OCR + tradução de PDFs raster** — quando o site estiver maduro em texto puro, adicionar produto separado (ou modo premium) que recebe PDF escaneado (imagem), faz OCR (Tesseract ou API), reconstrói o documento como texto e traduz preservando layout. Produto distinto do tradutor atual, que só funciona com PDFs de texto nativo.
 
 ---
 
@@ -187,6 +190,13 @@ Paths sem acentos, ambiente Windows.
 ---
 
 ## Histórico de sessões
+
+### Sessão #3 — 2026-05-23
+- Problema 2 (fontes): substituídas fontes base14 (Latin-1) por NotoSans via `pymupdf-fonts`.
+- `src/writer.py` refatorado: detecta bold/italic e usa variante correta (notos/notosbo/notosit/notosbi). Fallback gracioso para base14 se o pacote não estiver instalado.
+- `requirements.txt` atualizado com `pymupdf-fonts>=1.0.5`.
+- Validado visualmente: zero "?" no output, acentos e caracteres especiais renderizando corretamente.
+- Próximo: Problema 1 (expansão de texto) ou Problema 3 (agrupamento de parágrafos).
 
 ### Sessão #2 — 2026-05-23
 - Retomada do projeto. Confirmei todos os arquivos em disco.

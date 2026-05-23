@@ -7,6 +7,13 @@ Fase 0:
 - Cache em memoria por (source, target, texto) para evitar traduzir o mesmo
   termo varias vezes (cabecalhos, rodapes, "Page X of Y", etc.).
 
+Protecao de caracteres especiais:
+- Google Translate mangli caracteres Unicode fora do Latin-1 (en-dash, bullet,
+  aspas tipograficas, etc.) devolvendo '?'.
+- Antes de enviar, substituimos esses chars por placeholders ASCII unicos que
+  o tradutor preserva; apos a traducao, restauramos os originais.
+- Spans compostos APENAS de simbolos/numeros/espacos sao devolvidos sem traduzir.
+
 Arquitetura:
 - Interface Translator e implementacoes concretas.
 - get_translator(provider) facilita trocar para Claude/DeepL/OpenAI no futuro
@@ -15,8 +22,9 @@ Arquitetura:
 from __future__ import annotations
 
 import logging
+import re
 import time
-from typing import List, Protocol
+from typing import Dict, List, Protocol, Tuple
 
 from deep_translator import GoogleTranslator, MyMemoryTranslator
 from deep_translator.exceptions import (
@@ -27,6 +35,83 @@ from deep_translator.exceptions import (
 
 log = logging.getLogger(__name__)
 
+
+# ---------------------------------------------------------------------------
+# Protecao de caracteres especiais
+# ---------------------------------------------------------------------------
+
+# Caracteres que provedores gratuitos costumam mandar como '?'.
+# Ordem importa: processar strings mais longas primeiro se houver ambiguidade.
+_SPECIAL_CHARS: List[Tuple[str, str]] = [
+    ("—", "__EMDASH__"),    # — em-dash
+    ("–", "__ENDASH__"),    # – en-dash
+    ("•", "__BULLET__"),    # • bullet
+    ("‘", "__LSQUO__"),     # ' aspas esquerda simples
+    ("’", "__RSQUO__"),     # ' aspas direita simples / apostrofe
+    ("“", "__LDQUO__"),     # " aspas esquerda dupla
+    ("”", "__RDQUO__"),     # " aspas direita dupla
+    ("©", "__COPY__"),      # © copyright
+    ("®", "__REG__"),       # ® registered
+    ("™", "__TM__"),        # ™ trademark
+    ("°", "__DEG__"),       # ° graus
+    ("×", "__TIMES__"),     # × multiplicacao
+    ("÷", "__DIV__"),       # ÷ divisao
+    ("…", "__ELLIP__"),     # … reticencias
+    # NBSP normalizado diretamente em _protect() sem placeholder
+]
+
+# Conjunto de chars especiais para deteccao rapida
+_SPECIAL_SET = {ch for ch, _ in _SPECIAL_CHARS}
+
+# Regex para detectar se um texto tem conteudo alfabetico traduzivel
+_HAS_ALPHA = re.compile(r"[a-zA-ZÀ-ɏЀ-ӿ]")
+
+
+def _protect(text: str) -> Tuple[str, bool]:
+    """
+    Substitui caracteres especiais por placeholders ASCII.
+
+    Tambem normaliza NBSP para espaco normal (nao precisa restaurar).
+    Retorna (texto_protegido, houve_substituicao).
+    """
+    # Normalizar NBSP antes de qualquer outra coisa
+    text = text.replace("\u00a0", " ")
+    modified = False
+    for ch, placeholder in _SPECIAL_CHARS:
+        if ch in text:
+            text = text.replace(ch, placeholder)
+            modified = True
+    return text, modified
+
+
+def _restore(text: str) -> str:
+    """Restaura placeholders de volta aos caracteres originais."""
+    for ch, placeholder in _SPECIAL_CHARS:
+        if placeholder in text:
+            text = text.replace(placeholder, ch)
+    return text
+
+
+def _is_untranslatable(text: str) -> bool:
+    """
+    Retorna True se o texto nao tem conteudo alfabetico e nao precisa de
+    traducao (numeros, simbolos, bullets isolados, etc.).
+    """
+    stripped = text.strip()
+    if not stripped:
+        return True
+    # So um caractere nao-alfabetico
+    if len(stripped) == 1 and not stripped.isalpha():
+        return True
+    # Nenhuma letra (so numeros, pontuacao, espacos, simbolos especiais)
+    if not _HAS_ALPHA.search(stripped):
+        return True
+    return False
+
+
+# ---------------------------------------------------------------------------
+# Providers
+# ---------------------------------------------------------------------------
 
 class TranslatorProvider(Protocol):
     """Interface comum para provedores de traducao."""
@@ -40,8 +125,6 @@ class GoogleProvider:
     name = "google"
 
     def translate(self, text: str, source: str, target: str) -> str:
-        # deep-translator usa codigos de idioma curtos: 'en', 'pt', 'es', ...
-        # Para portugues do Brasil, 'pt' funciona; para PT-PT use 'pt-PT'
         return GoogleTranslator(source=source, target=target).translate(text)
 
 
@@ -50,7 +133,6 @@ class MyMemoryProvider:
 
     @staticmethod
     def _expand(code: str) -> str:
-        # MyMemory exige codigos longos (en-US, pt-BR)
         mapping = {
             "en": "en-US",
             "pt": "pt-BR",
@@ -81,6 +163,10 @@ def get_translator(name: str = "google") -> TranslatorProvider:
     return PROVIDERS[name]
 
 
+# ---------------------------------------------------------------------------
+# Servico principal
+# ---------------------------------------------------------------------------
+
 class TranslationService:
     """
     Camada de servico que orquestra provedor + cache + fallback.
@@ -102,24 +188,31 @@ class TranslationService:
         self._cache: dict[tuple[str, str, str], str] = {}
 
     def translate(self, text: str, source: str, target: str) -> str:
-        # Strings triviais nao precisam de API
-        stripped = text.strip()
-        if not stripped:
+        # 1. Texto vazio ou so whitespace
+        if not text or not text.strip():
             return text
-        if len(stripped) < 2 and not stripped.isalpha():
-            return text  # numeros soltos, simbolos
 
+        # 2. Sem conteudo traduzivel (so simbolos, numeros, bullets)
+        if _is_untranslatable(text):
+            return text
+
+        # 3. Cache (chave = texto ORIGINAL para consistencia)
         key = (source, target, text)
         if key in self._cache:
             return self._cache[key]
+
+        # 4. Proteger caracteres especiais antes de enviar ao provider
+        protected, had_specials = _protect(text)
 
         last_err: Exception | None = None
         for provider in [self.primary, *self.fallbacks]:
             try:
                 if self.request_delay:
                     time.sleep(self.request_delay)
-                out = provider.translate(text, source, target)
-                if out:
+                raw_out = provider.translate(protected, source, target)
+                if raw_out:
+                    # 5. Restaurar caracteres especiais no resultado
+                    out = _restore(raw_out) if had_specials else raw_out
                     self._cache[key] = out
                     return out
             except (RequestError, TooManyRequests, TranslationNotFound) as e:
@@ -136,7 +229,6 @@ class TranslationService:
                 )
                 last_err = e
 
-        # Todos falharam -> devolve original (mais seguro que travar pipeline)
         log.error(
             "Todos os providers falharam para %r (ultimo erro: %s). "
             "Mantendo texto original.",
