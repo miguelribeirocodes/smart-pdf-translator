@@ -10,9 +10,9 @@
 
 **Fase atual:** Fase 1 — Qualidade de tradução e robustez.
 
-**Última sessão:** 2026-05-23 (Sessão #3). Problema 2 (fontes/"?") totalmente resolvido e validado com PDF real. Zero "?" no documento inteiro. Bullets e en-dashes renderizando corretamente.
+**Última sessão:** 2026-05-23 (Sessão #5). Problema 3 (agrupamento de parágrafos) em andamento.
 
-**Próximo bloco de trabalho:** Problema 3 (agrupamento de parágrafos) — reagrupar spans em blocos lógicos antes de traduzir, melhorando coerência do texto traduzido. Sonnet.
+**Próximo bloco de trabalho:** Problema 4 (cabeçalhos/rodapés/tabelas) — detecção heurística e tratamento especial. Sonnet.
 
 ---
 
@@ -90,11 +90,12 @@
 #### Fase 1 — atacar os 5 problemas (ATUAL)
 - [x] **Problema 2: Fontes sem charset Unicode** — ✅ resolvido (Sessão #2/3). NotoSans via `pymupdf-fonts` elimina "?" de acentos. Fix adicional no `translator.py`: protect/restore de `–`, `•`, `'`, `"`, `©`, `°` etc. antes de enviar ao Google Translate (que os malhava para `?`). Spans com apenas símbolos/números pulam a tradução.
 - [x] **Problema 1: Expansão de texto** — ✅ resolvido (Sessão #4). `extractor.py`: adicionado `line_x1` e `page_w` ao TextSpan. `writer.py`: draw_rect usa espaço real da linha + cap na margem da página (30pt). Redução de fonte em 3 passos (90/80/70%) antes da descida fina. Mínimo de 6pt (era 4pt). 229 overflows → 0.
-- [ ] **Problema 3: Granularidade de blocos** — reagrupar spans em parágrafos lógicos antes de traduzir
+- [x] **Problema 3: Granularidade de blocos** — ✅ resolvido (Sessão #5). Novo módulo `src/grouper.py` agrupa spans em TextBlocks por (page, block_idx). `pipeline.py` traduz por bloco (2.2× menos chamadas ao tradutor). `writer.py` escreve texto traduzido no bbox do bloco inteiro — elimina os grandes espaços vazios entre spans. Fix de linha visual: spans no mesmo y são unidos com espaço (campos tabulados); linhas em y diferente usam \n. Validado com PDF mock (25 págs, 680 blocos).
 - [ ] **Problema 4: Cabeçalhos/rodapés/tabelas** — detecção heurística e tratamento especial
 - [ ] **Problema 5: Glossário técnico** — sistema de termos protegidos (JSON/YAML por projeto)
 
 #### Fase 2 — robustez
+- [ ] **Suite de testes pré-produção** — baixar ~10 PDFs variados (relatórios, artigos, manuais, formulários) da internet e rodar no app antes de ir à produção. Validar edge cases reais: multi-coluna, tabelas complexas, fontes exóticas, PDFs grandes.
 - [ ] **Detecção de PDF escaneado** — pré-análise antes de traduzir: bloquear na API com mensagem clara se PDF for raster/imagem (sem texto extraível). OCR Tesseract como opção futura.
 - [ ] **Recuperação de jobs** — job persiste mesmo se usuário fechar o browser; histórico de jobs acessível; arquivo fica disponível por X horas após conclusão.
 - [ ] Comparação visual lado-a-lado (antes/depois por página)
@@ -244,5 +245,13 @@ Paths sem acentos, ambiente Windows.
 - Criei `setup_git.ps1` apontando para o repo `miguelribeirocodes/smart-pdf-translator`.
 - Criei `README.md` final.
 - **Pendente do Miguel:** rodar `setup_git.ps1` para subir tudo no GitHub e depois `uvicorn app.main:app --reload` para testar com Google Translate real.
+
+### Sessão #5 — 2026-05-23
+- Problema 1 aceito por Miguel: critério cumprido (zero overflows fora da página).
+- Nota de produto: criar suite de testes pré-produção — baixar PDFs variados da internet e rodar no app para validar edge cases reais antes do lançamento.
+- Problema 3 CONCLUÍDO: novo src/grouper.py (TextBlock, group_into_blocks); pipeline.py usa blocos; writer.py escreve por bloco.
+- Fix crítico no grouper: spans no mesmo y visual (campos tabulados, ex: "1." + "INTRODUCTION..." na TOC) são unidos com espaço em vez de \n. Linhas em y diferente usam \n (listas, títulos multi-linha).
+- Resultado: TOC com entradas completas, parágrafos fluindo naturalmente, lista de Annex titles com quebras corretas.
+- Próximo: Problema 4 (cabeçalhos/rodapés/tabelas). Sonnet.
 
 <!-- Próxima sessão: adicionar entrada aqui antes de fechar -->
