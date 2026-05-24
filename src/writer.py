@@ -80,6 +80,11 @@ _FONT_SIZE_CANDIDATES_RATIOS = [1.0, 0.90, 0.80, 0.70]
 _FONT_SIZE_MINIMUM = 6.0
 _FONT_SIZE_FINE_STEP = 0.5
 
+# Padding interno aplicado ao lado esquerdo de cada bloco ao reescrever o texto.
+# Afasta o texto da borda vertical das celulas de tabela, evitando o artefato
+# cosmetico onde a linha divisora parece "cortar" a primeira letra do conteudo.
+_CELL_PADDING_LEFT = 2.0
+
 
 def _detect_variant(flags: int, font: str) -> str:
     """Detecta variante de fonte (regular/bold/italic/bold_italic) a partir de flags e nome."""
@@ -348,7 +353,7 @@ def write_translated_pdf_blocks(
                 bx1_safe = min(bx1, right_cap)
                 bx1_safe = max(bx1_safe, bx0 + 10.0)  # largura minima de 10pt
 
-                draw_rect = pymupdf.Rect(bx0, by0 - 1.0, bx1_safe, by1 + 2.0)
+                draw_rect = pymupdf.Rect(bx0 + _CELL_PADDING_LEFT, by0 - 1.0, bx1_safe, by1 + 2.0)
 
                 variant  = _detect_variant(block.flags, block.font)
                 fontname = _variant_to_fontname(variant)

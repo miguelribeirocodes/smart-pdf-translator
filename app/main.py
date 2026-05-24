@@ -44,6 +44,7 @@ from src.translator import SUPPORTED_LANGUAGES  # noqa: E402
 
 from .auth import User, get_current_user  # noqa: E402
 from .billing import PLANS  # noqa: E402
+from .glossaries import GlossaryStore  # noqa: E402
 from .jobs import Job, store  # noqa: E402
 from .quotas import QuotaExceeded, check_quota  # noqa: E402
 
@@ -60,6 +61,10 @@ INPUT_DIR = STORAGE_DIR / "input"
 OUTPUT_DIR = STORAGE_DIR / "output"
 INPUT_DIR.mkdir(exist_ok=True)
 OUTPUT_DIR.mkdir(exist_ok=True)
+GLOSSARY_DIR = STORAGE_DIR / "glossaries"
+GLOSSARY_DIR.mkdir(exist_ok=True)
+
+glossary_store = GlossaryStore(GLOSSARY_DIR)
 
 
 app = FastAPI(
@@ -101,6 +106,7 @@ async def create_translation(
     file: UploadFile = File(...),
     source_lang: str = Form("en"),
     target_lang: str = Form("pt"),
+    glossary_id: str = Form(""),
     user: User = Depends(get_current_user),
 ) -> dict:
     if source_lang not in SUPPORTED_LANGUAGES:
@@ -111,6 +117,13 @@ async def create_translation(
         raise HTTPException(400, "source_lang e target_lang devem ser diferentes.")
     if not file.filename or not file.filename.lower().endswith(".pdf"):
         raise HTTPException(400, "O arquivo precisa ser um PDF (.pdf).")
+
+    # Validar glossario se informado
+    resolved_glossary_path: Optional[str] = None
+    if glossary_id:
+        resolved_glossary_path = glossary_store.path_for(glossary_id)
+        if resolved_glossary_path is None:
+            raise HTTPException(400, f"Glossario nao encontrado: {glossary_id}")
 
     # Cria job e salva upload em disco
     job = store.create(
@@ -142,6 +155,7 @@ async def create_translation(
         output_path=str(output_path),
         source_lang=source_lang,
         target_lang=target_lang,
+        glossary_path=resolved_glossary_path,
     )
 
     return {"job_id": job.id, "status": "pending"}
@@ -153,6 +167,7 @@ def _run_translation(
     output_path: str,
     source_lang: str,
     target_lang: str,
+    glossary_path: Optional[str] = None,
 ) -> None:
     """Executa o pipeline em background e atualiza o store."""
     store.update(job_id, status="running", stage="Iniciando", progress=0.0)
@@ -170,6 +185,7 @@ def _run_translation(
             fallbacks=["mymemory"],
             on_progress=on_progress,
             request_delay=0.05,  # evita rate-limit do Google Translate
+            glossary_path=glossary_path,
         )
         from datetime import datetime as _dt
         store.update(
@@ -222,6 +238,66 @@ def download_job(job_id: str) -> FileResponse:
         media_type="application/pdf",
         filename=download_name,
     )
+
+
+# ---------- Glossario CRUD ----------
+
+@app.post("/api/glossaries")
+def create_glossary(payload: dict) -> dict:
+    """
+    Cria um glossario tecnico.
+
+    Body JSON:
+        { "name": "Meu Glossario", "terms": {"CFTV": "CFTV", "scope": "escopo"} }
+    """
+    name = payload.get("name", "").strip()
+    terms = payload.get("terms", {})
+    if not name:
+        raise HTTPException(400, "Campo 'name' e obrigatorio.")
+    if not isinstance(terms, dict):
+        raise HTTPException(400, "Campo 'terms' deve ser um objeto {source: target}.")
+    g = glossary_store.create(name=name, terms=terms)
+    return g.to_dict()
+
+
+@app.get("/api/glossaries")
+def list_glossaries() -> dict:
+    """Lista todos os glossarios cadastrados (id, name, term_count)."""
+    return {"glossaries": glossary_store.list_all()}
+
+
+@app.get("/api/glossaries/{glossary_id}")
+def get_glossary(glossary_id: str) -> dict:
+    """Retorna os detalhes de um glossario (incluindo todos os termos)."""
+    g = glossary_store.get(glossary_id)
+    if not g:
+        raise HTTPException(404, "Glossario nao encontrado.")
+    return g.to_dict()
+
+
+@app.put("/api/glossaries/{glossary_id}")
+def update_glossary(glossary_id: str, payload: dict) -> dict:
+    """
+    Atualiza nome e/ou termos de um glossario existente.
+
+    Body JSON (campos opcionais):
+        { "name": "Novo Nome", "terms": {"CFTV": "CFTV"} }
+    """
+    name = payload.get("name")
+    terms = payload.get("terms")
+    updated = glossary_store.update(glossary_id, name=name, terms=terms)
+    if not updated:
+        raise HTTPException(404, "Glossario nao encontrado.")
+    return updated.to_dict()
+
+
+@app.delete("/api/glossaries/{glossary_id}")
+def delete_glossary(glossary_id: str) -> dict:
+    """Remove um glossario permanentemente."""
+    deleted = glossary_store.delete(glossary_id)
+    if not deleted:
+        raise HTTPException(404, "Glossario nao encontrado.")
+    return {"deleted": True}
 
 
 @app.get("/healthz")

@@ -27,6 +27,11 @@ import time
 from typing import Dict, List, Protocol, Tuple
 
 from deep_translator import GoogleTranslator, MyMemoryTranslator
+
+# Import opcional para evitar circular; Glossary nao depende de translator
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from .glossary import Glossary
 from deep_translator.exceptions import (
     RequestError,
     TooManyRequests,
@@ -181,10 +186,12 @@ class TranslationService:
         primary: str = "google",
         fallbacks: List[str] | None = None,
         request_delay: float = 0.0,
+        glossary: "Glossary | None" = None,
     ):
         self.primary = get_translator(primary)
         self.fallbacks = [get_translator(n) for n in (fallbacks or [])]
         self.request_delay = request_delay
+        self.glossary = glossary
         self._cache: dict[tuple[str, str, str], str] = {}
 
     def translate(self, text: str, source: str, target: str) -> str:
@@ -201,8 +208,14 @@ class TranslationService:
         if key in self._cache:
             return self._cache[key]
 
-        # 4. Proteger caracteres especiais antes de enviar ao provider
-        protected, had_specials = _protect(text)
+        # 4a. Proteger termos do glossario (antes dos caracteres especiais)
+        gmap: dict[str, str] = {}
+        text_to_translate = text
+        if self.glossary and len(self.glossary) > 0:
+            text_to_translate, gmap = self.glossary.protect(text)
+
+        # 4b. Proteger caracteres especiais antes de enviar ao provider
+        protected, had_specials = _protect(text_to_translate)
 
         last_err: Exception | None = None
         for provider in [self.primary, *self.fallbacks]:
@@ -211,8 +224,11 @@ class TranslationService:
                     time.sleep(self.request_delay)
                 raw_out = provider.translate(protected, source, target)
                 if raw_out:
-                    # 5. Restaurar caracteres especiais no resultado
+                    # 5a. Restaurar caracteres especiais no resultado
                     out = _restore(raw_out) if had_specials else raw_out
+                    # 5b. Restaurar termos do glossario
+                    if gmap:
+                        out = self.glossary.restore(out, gmap)
                     self._cache[key] = out
                     return out
             except (RequestError, TooManyRequests, TranslationNotFound) as e:

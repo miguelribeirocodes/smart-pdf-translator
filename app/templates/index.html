@@ -66,6 +66,19 @@
         </div>
       </div>
 
+      <!-- Glossario -->
+      <div class="mb-6">
+        <div class="flex items-center justify-between mb-1">
+          <label class="text-sm font-medium text-slate-700">Glossario tecnico <span class="text-slate-400 font-normal">(opcional)</span></label>
+          <button type="button" id="manage-glossary-btn"
+                  class="text-xs text-blue-600 hover:underline">Gerenciar glossarios</button>
+        </div>
+        <select id="glossary-sel"
+                class="w-full rounded-md border-slate-300 px-3 py-2 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 border text-sm">
+          <option value="">Sem glossario</option>
+        </select>
+      </div>
+
       <!-- Drop area -->
       <label id="drop-area" for="file-input"
              class="block border-2 border-dashed border-slate-300 rounded-xl p-10 text-center cursor-pointer transition hover:border-blue-400">
@@ -118,10 +131,9 @@
     <!-- Aviso Fase 0 -->
     <div class="mt-6 text-xs text-slate-500 bg-slate-100 border border-slate-200 rounded-lg p-3">
       <strong>Versao Fase 0 (piloto):</strong>
-      traducao crua via Google Translate (gratuito). Ainda nao trata expansao
-      de texto, fontes sem charset latino, reagrupamento de paragrafos,
-      cabecalhos/rodapes ou glossario tecnico - esses problemas vem nas
-      proximas iteracoes.
+      traducao crua via Google Translate (gratuito). Ainda nao trata
+      cabecalhos/rodapes ou conversao de estilo avancado — essas melhorias
+      vem nas proximas iteracoes.
     </div>
   </main>
 
@@ -208,6 +220,7 @@
       fd.append('file', currentFile);
       fd.append('source_lang', sourceSel.value);
       fd.append('target_lang', targetSel.value);
+      if (glossarySel.value) fd.append('glossary_id', glossarySel.value);
 
       try {
         const res = await fetch('/api/translate', { method: 'POST', body: fd });
@@ -259,6 +272,139 @@
       errorMsg.textContent = msg;
       errorWrap.classList.remove('hidden');
     }
+  </script>
+
+  <!-- Modal Glossario -->
+  <div id="glossary-modal" class="hidden fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
+    <div class="bg-white rounded-2xl shadow-xl w-full max-w-lg max-h-[90vh] flex flex-col">
+      <div class="flex items-center justify-between px-6 py-4 border-b border-slate-200">
+        <h3 class="font-semibold text-slate-900">Gerenciar Glossarios</h3>
+        <button id="close-modal-btn" class="text-slate-400 hover:text-slate-700 text-xl leading-none">&times;</button>
+      </div>
+      <div class="overflow-y-auto flex-1 px-6 py-4 space-y-4">
+        <!-- Lista de glossarios existentes -->
+        <div>
+          <p class="text-sm font-medium text-slate-700 mb-2">Glossarios existentes</p>
+          <div id="glossary-list" class="space-y-2 text-sm text-slate-600">
+            <p class="text-slate-400 italic">Carregando...</p>
+          </div>
+        </div>
+        <hr class="border-slate-200"/>
+        <!-- Criar novo -->
+        <div>
+          <p class="text-sm font-medium text-slate-700 mb-2">Criar novo glossario</p>
+          <input id="new-glossary-name" type="text" placeholder="Nome do glossario"
+                 class="w-full border border-slate-300 rounded-md px-3 py-2 text-sm mb-2 focus:outline-none focus:ring-2 focus:ring-blue-500"/>
+          <textarea id="new-glossary-terms" rows="6"
+                    placeholder="Um termo por linha: origem = destino&#10;Exemplo:&#10;CFTV = CFTV&#10;Novo Nordisk = Novo Nordisk&#10;scope of work = escopo de trabalho"
+                    class="w-full border border-slate-300 rounded-md px-3 py-2 text-sm font-mono resize-none focus:outline-none focus:ring-2 focus:ring-blue-500"></textarea>
+          <button id="create-glossary-btn"
+                  class="mt-2 w-full bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium px-4 py-2 rounded-md transition">
+            Criar glossario
+          </button>
+          <p id="glossary-create-msg" class="text-xs mt-1 hidden"></p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // ---- Glossario JS ----
+    const glossarySel     = document.getElementById('glossary-sel');
+    const manageBtn       = document.getElementById('manage-glossary-btn');
+    const modal           = document.getElementById('glossary-modal');
+    const closeModalBtn   = document.getElementById('close-modal-btn');
+    const glossaryList    = document.getElementById('glossary-list');
+    const newName         = document.getElementById('new-glossary-name');
+    const newTerms        = document.getElementById('new-glossary-terms');
+    const createBtn       = document.getElementById('create-glossary-btn');
+    const createMsg       = document.getElementById('glossary-create-msg');
+
+    async function loadGlossaries() {
+      const r = await fetch('/api/glossaries');
+      const data = await r.json();
+      // Update selector
+      const current = glossarySel.value;
+      glossarySel.innerHTML = '<option value="">Sem glossario</option>';
+      for (const g of data.glossaries) {
+        const opt = document.createElement('option');
+        opt.value = g.id;
+        opt.textContent = g.name + ' (' + g.term_count + ' termos)';
+        glossarySel.appendChild(opt);
+      }
+      if (current) glossarySel.value = current;
+      // Update modal list
+      if (data.glossaries.length === 0) {
+        glossaryList.innerHTML = '<p class="text-slate-400 italic">Nenhum glossario cadastrado.</p>';
+      } else {
+        glossaryList.innerHTML = data.glossaries.map(g => `
+          <div class="flex items-center justify-between bg-slate-50 rounded-lg px-3 py-2 border border-slate-200">
+            <div>
+              <span class="font-medium text-slate-800">${g.name}</span>
+              <span class="ml-2 text-xs text-slate-500">${g.term_count} termos</span>
+            </div>
+            <button data-id="${g.id}" class="delete-gloss-btn text-red-400 hover:text-red-600 text-xs">Remover</button>
+          </div>`).join('');
+        document.querySelectorAll('.delete-gloss-btn').forEach(btn => {
+          btn.addEventListener('click', async () => {
+            if (!confirm('Remover este glossario?')) return;
+            await fetch('/api/glossaries/' + btn.dataset.id, { method: 'DELETE' });
+            loadGlossaries();
+          });
+        });
+      }
+    }
+
+    manageBtn.addEventListener('click', () => {
+      modal.classList.remove('hidden');
+      loadGlossaries();
+    });
+    closeModalBtn.addEventListener('click', () => modal.classList.add('hidden'));
+    modal.addEventListener('click', (e) => { if (e.target === modal) modal.classList.add('hidden'); });
+
+    function parseTerms(raw) {
+      const terms = {};
+      for (const line of raw.split('
+')) {
+        const eq = line.indexOf('=');
+        if (eq < 1) continue;
+        const src = line.slice(0, eq).trim();
+        const tgt = line.slice(eq + 1).trim();
+        if (src) terms[src] = tgt || src;
+      }
+      return terms;
+    }
+
+    createBtn.addEventListener('click', async () => {
+      const name = newName.value.trim();
+      const terms = parseTerms(newTerms.value);
+      if (!name) { showCreateMsg('Informe o nome do glossario.', 'red'); return; }
+      if (Object.keys(terms).length === 0) { showCreateMsg('Adicione pelo menos um termo.', 'red'); return; }
+      const r = await fetch('/api/glossaries', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, terms })
+      });
+      if (r.ok) {
+        newName.value = '';
+        newTerms.value = '';
+        showCreateMsg('Glossario criado com sucesso!', 'green');
+        loadGlossaries();
+      } else {
+        const err = await r.text();
+        showCreateMsg('Erro: ' + err, 'red');
+      }
+    });
+
+    function showCreateMsg(msg, color) {
+      createMsg.textContent = msg;
+      createMsg.className = 'text-xs mt-1 ' + (color === 'green' ? 'text-green-600' : 'text-red-600');
+      createMsg.classList.remove('hidden');
+      setTimeout(() => createMsg.classList.add('hidden'), 3000);
+    }
+
+    // Carregar glossarios ao iniciar
+    loadGlossaries();
   </script>
 </body>
 </html>

@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from typing import Callable, Optional
 
 from .extractor import extract_spans, page_count
+from .glossary import Glossary
 from .grouper import group_into_blocks
 from .translator import TranslationService
 from .writer import write_translated_pdf_blocks
@@ -50,6 +51,7 @@ def translate_pdf(
     fallbacks: Optional[list[str]] = None,
     on_progress: Optional[ProgressCallback] = None,
     request_delay: float = 0.05,
+    glossary_path: Optional[str] = None,
 ) -> TranslationResult:
     """
     Traduz um PDF in-place preservando layout.
@@ -67,6 +69,7 @@ def translate_pdf(
         fallbacks:      lista de provedores de fallback.
         on_progress:    callback opcional para reportar progresso.
         request_delay:  delay entre chamadas ao tradutor (segundos).
+        glossary_path:  caminho para JSON de glossario (opcional).
 
     Returns:
         TranslationResult com estatisticas do processo.
@@ -110,7 +113,17 @@ def translate_pdf(
     )
 
     # --- Traducao por bloco ---
-    svc = TranslationService(primary=provider, fallbacks=fallbacks, request_delay=request_delay)
+    # --- Glossario ---
+    glossary: Optional[Glossary] = None
+    if glossary_path:
+        try:
+            glossary = Glossary.load(glossary_path)
+            _report(f"Glossario carregado: {len(glossary)} termos protegidos", 15.0)
+        except Exception as e:  # noqa: BLE001
+            log.warning("Nao foi possivel carregar glossario %r: %s", glossary_path, e)
+
+    # --- Traducao por bloco ---
+    svc = TranslationService(primary=provider, fallbacks=fallbacks, request_delay=request_delay, glossary=glossary)
     translations: list[str] = []
     failed = 0
     total = len(blocks)

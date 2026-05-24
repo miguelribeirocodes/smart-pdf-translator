@@ -10,9 +10,9 @@
 
 **Fase atual:** Fase 1 — Qualidade de tradução e robustez.
 
-**Última sessão:** 2026-05-23 (Sessão #5). Problema 3 (agrupamento de parágrafos) em andamento.
+**Última sessão:** 2026-05-24 (Sessão #6). Problema 3 encerrado (padding de célula) + Problema 5 concluído (glossário técnico).
 
-**Próximo bloco de trabalho:** Problema 4 (cabeçalhos/rodapés/tabelas) — detecção heurística e tratamento especial. Sonnet.
+**Próximo bloco de trabalho:** A definir com Miguel — Fase 1 completa (Problemas 1–3 + 5). Problema 4 real (cabeçalhos/rodapés persistentes) ou avançar para Fase 2 (robustez). Sonnet.
 
 ---
 
@@ -90,9 +90,9 @@
 #### Fase 1 — atacar os 5 problemas (ATUAL)
 - [x] **Problema 2: Fontes sem charset Unicode** — ✅ resolvido (Sessão #2/3). NotoSans via `pymupdf-fonts` elimina "?" de acentos. Fix adicional no `translator.py`: protect/restore de `–`, `•`, `'`, `"`, `©`, `°` etc. antes de enviar ao Google Translate (que os malhava para `?`). Spans com apenas símbolos/números pulam a tradução.
 - [x] **Problema 1: Expansão de texto** — ✅ resolvido (Sessão #4). `extractor.py`: adicionado `line_x1` e `page_w` ao TextSpan. `writer.py`: draw_rect usa espaço real da linha + cap na margem da página (30pt). Redução de fonte em 3 passos (90/80/70%) antes da descida fina. Mínimo de 6pt (era 4pt). 229 overflows → 0.
-- [x] **Problema 3: Granularidade de blocos** — ✅ resolvido (Sessão #5). Novo módulo `src/grouper.py` agrupa spans em TextBlocks por (page, block_idx). `pipeline.py` traduz por bloco (2.2× menos chamadas ao tradutor). `writer.py` escreve texto traduzido no bbox do bloco inteiro — elimina os grandes espaços vazios entre spans. Fix de linha visual: spans no mesmo y são unidos com espaço (campos tabulados); linhas em y diferente usam \n. Validado com PDF mock (25 págs, 680 blocos).
+- [x] **Problema 3: Granularidade de blocos** — ✅ resolvido (Sessão #5/6). Novo módulo `src/grouper.py` agrupa spans em TextBlocks por (page, block_idx). `pipeline.py` traduz por bloco (2.2× menos chamadas ao tradutor). `writer.py` escreve texto traduzido no bbox do bloco inteiro — elimina os grandes espaços vazios entre spans. Fix de linha visual: spans no mesmo y são unidos com espaço (campos tabulados); linhas em y diferente usam \n. Fix cosmético (Sessão #6): `_CELL_PADDING_LEFT = 2.0pt` adicionado ao draw_rect — afasta o texto da borda vertical de células de tabela, eliminando o artefato visual de "texto cortado" pela linha divisória. Validado com PDF real (25 págs, 1049 blocos).
 - [x] **Problema 4: Tabelas (células multi-coluna)** — ✅ resolvido (Sessão #5). `grouper.py`: novo `_split_by_columns()` detecta spans na mesma y-visual com grandes gaps horizontais (> 2× font_size) e os divide em sub-blocos individuais por célula. Parágrafos multi-linha não são afetados. Blocos: 680 → 1049 (inclui 369 sub-blocos de células de tabela). Cabeçalhos/rodapés persistentes a tratar em Problema 4 real.
-- [ ] **Problema 5: Glossário técnico** — sistema de termos protegidos (JSON/YAML por projeto)
+- [x] **Problema 5: Glossário técnico** — ✅ resolvido (Sessão #6). Novo módulo `src/glossary.py` com classe `Glossary`: protect/restore de termos via placeholders `__GLOSS0__` antes de enviar ao provedor. `TranslationService` recebe `glossary` opcional. `pipeline.py` aceita `glossary_path` opcional. `app/glossaries.py`: `GlossaryStore` com persistência em JSON (`app/storage/glossaries/`). 5 endpoints REST (`POST/GET/PUT/DELETE /api/glossaries`). UI: dropdown para selecionar glossário + modal para criar/remover glossários com textarea `origem = destino`.
 
 #### Fase 2 — robustez
 - [ ] **Suite de testes pré-produção** — baixar ~10 PDFs variados (relatórios, artigos, manuais, formulários) da internet e rodar no app antes de ir à produção. Validar edge cases reais: multi-coluna, tabelas complexas, fontes exóticas, PDFs grandes.
@@ -208,7 +208,13 @@ Paths sem acentos, ambiente Windows.
 
 ## Histórico de sessões
 
-### Sessão #4 — 2026-05-23
+### Sessão #6 — 2026-05-24
+- Fix cosmético em `writer.py`: adicionada constante `_CELL_PADDING_LEFT = 2.0` e aplicada ao `draw_rect` de `write_translated_pdf_blocks()` (`bx0 + _CELL_PADDING_LEFT`). Corrige artefato visual de "texto cortado" pela linha divisória de células de tabela.
+- Problema 3 oficialmente encerrado.
+- **Problema 5 — Glossário técnico:** novo módulo `src/glossary.py` (classe `Glossary` com protect/restore via `__GLOSS0__`). `TranslationService` aceita `glossary` opcional. `pipeline.py` aceita `glossary_path`. `app/glossaries.py` com `GlossaryStore` (JSON em disco). 5 endpoints REST em `app/main.py`. UI atualizada: dropdown de seleção + modal criar/remover com textarea `origem = destino`.
+- Fase 1 dos 5 problemas: Problemas 1, 2, 3 e 5 resolvidos. Problema 4 (cabeçalhos/rodapés) a definir.
+
+### Sessão #5 — 2026-05-23/24
 - Problema 1 (expansão de texto): extractor.py recebe line_x1 e page_w por span; writer.py usa espaço real da linha como draw_rect, capeia na margem (page_w - 30pt).
 - Redução de fonte: 3 passos rápidos (90/80/70%) antes da descida fina; mínimo 6pt (era 4pt).
 - Resultado: 229 overflows → 0. Layout validado visualmente.
