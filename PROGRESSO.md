@@ -8,11 +8,18 @@
 
 ## Onde estamos agora
 
-**Fase atual:** Fase 1 — Qualidade de tradução e robustez.
+**Fase atual:** Fase 1 — Qualidade de tradução e robustez. **Concluída.**
 
-**Última sessão:** 2026-05-24 (Sessão #6/7). Correções genéricas de tabela e códigos de documento aplicadas.
+**Última sessão:** 2026-05-24 (Sessão #9 — Opus). Refinamento do right-cap por bordas verticais: tabelas com células vazias vizinhas agora também são protegidas.
 
-**Próximo bloco de trabalho:** Problema 4 pendente (rodapés/cabeçalhos de tabela persistentes em todas as páginas — texto sobreposto). Avaliar solução genérica vs. backlog Fase 2. **Usar Opus para esta sessão em diante.**
+**Próximo bloco de trabalho:** Fase 2 — robustez/produção:
+1. Detecção de PDF escaneado (bloquear na API com mensagem clara).
+2. Suite de testes pré-produção com PDFs variados da internet (relatórios, artigos, manuais, formulários).
+3. Recuperação de jobs (histórico + persistência além do browser fechado).
+
+Caso residual NÃO relacionado à Sessão #9 (escopo do grouper.py, Problema 3): em algumas linhas de tabela com 2 colunas adjacentes muito próximas, o grouper pode combinar células em um TextBlock único. Quando isso acontece, o right-cap (que atua entre blocos) não consegue separar. Exemplo observado: "Distribuição: Novo Nordisk - E AFRY BR - E" na capa do `document_pdf (1).pdf`. Pode ser revisitado se causar incômodo recorrente.
+
+Modelo sugerido: Sonnet para Fase 2 implementação rotineira; Opus para decisões de estratégia de testes e edge cases.
 
 ---
 
@@ -37,13 +44,13 @@
 | Problema 1 — expansão de texto (ajuste de bbox, font-size) | **Sonnet** | Engenharia direta, sem ambiguidade |
 | Problema 2 — fontes Unicode | ~~Sonnet~~ ✅ concluído | — |
 | Problema 3 — agrupamento de parágrafos | **Sonnet** (início) → avaliar Opus | Heurística moderada; se a detecção de blocos lógicos ficar complexa, escalar para Opus |
-| Problema 4 — cabeçalhos/rodapés/tabelas | **Opus** ← ATUAL | Detectar blocos repetitivos entre páginas; heurística mais complexa |
+| Problema 4 — cabeçalhos/rodapés/tabelas | ~~Opus~~ ✅ concluído | Right-cap dinâmico por vizinhos resolveu de forma genérica |
 | Problema 5 — glossário técnico | ~~Sonnet~~ ✅ concluído | — |
 | Fase 2 — suite de testes, detecção de PDF escaneado | **Opus** | Decisões de estratégia de testes e edge cases |
 | Arquitetura de produto (Fase 3 — decisão A/B/C) | **Opus** | Decisão estratégica de alto impacto |
 | Auth + Billing real | **Sonnet** | Implementação padrão |
 
-**Resumo:** Migrado para Opus a partir da Sessão #8. Problema 4 (rodapés/cabeçalhos) envolve heurística de detecção de blocos repetitivos — tarefa adequada para Opus. Fase 3 em diante também Opus para decisões arquiteturais.
+**Resumo:** Sessão #8 (Opus) fechou Fase 1. Daqui em diante: Sonnet para Fase 2 implementação rotineira; Opus para decisões de teste/edge cases e arquitetura (Fase 3).
 
 ---
 
@@ -92,7 +99,7 @@
 - [x] **Problema 2: Fontes sem charset Unicode** — ✅ resolvido (Sessão #2/3). NotoSans via `pymupdf-fonts` elimina "?" de acentos. Fix adicional no `translator.py`: protect/restore de `–`, `•`, `'`, `"`, `©`, `°` etc. antes de enviar ao Google Translate (que os malhava para `?`). Spans com apenas símbolos/números pulam a tradução.
 - [x] **Problema 1: Expansão de texto** — ✅ resolvido (Sessão #4). `extractor.py`: adicionado `line_x1` e `page_w` ao TextSpan. `writer.py`: draw_rect usa espaço real da linha + cap na margem da página (30pt). Redução de fonte em 3 passos (90/80/70%) antes da descida fina. Mínimo de 6pt (era 4pt). 229 overflows → 0.
 - [x] **Problema 3: Granularidade de blocos** — ✅ resolvido (Sessão #5/6). Novo módulo `src/grouper.py` agrupa spans em TextBlocks por (page, block_idx). `pipeline.py` traduz por bloco (2.2× menos chamadas ao tradutor). `writer.py` escreve texto traduzido no bbox do bloco inteiro — elimina os grandes espaços vazios entre spans. Fix de linha visual: spans no mesmo y são unidos com espaço (campos tabulados); linhas em y diferente usam \n. Fix cosmético (Sessão #6): `_CELL_PADDING_LEFT = 2.0pt` adicionado ao draw_rect — afasta o texto da borda vertical de células de tabela, eliminando o artefato visual de "texto cortado" pela linha divisória. Validado com PDF real (25 págs, 1049 blocos).
-- [x] **Problema 4: Tabelas (células multi-coluna)** — ✅ resolvido (Sessão #5). `grouper.py`: novo `_split_by_columns()` detecta spans na mesma y-visual com grandes gaps horizontais (> 2× font_size) e os divide em sub-blocos individuais por célula. Parágrafos multi-linha não são afetados. Blocos: 680 → 1049 (inclui 369 sub-blocos de células de tabela). Cabeçalhos/rodapés persistentes a tratar em Problema 4 real.
+- [x] **Problema 4: Tabelas / cabeçalhos / rodapés** — ✅ TOTALMENTE resolvido. (a) Sessão #5: `_split_by_columns()` detecta células de tabela por gap horizontal. (b) Sessão #7: detecção de bordas verticais via `page.get_drawings()` para posicionamento do x-inicial. (c) Sessão #8: `_compute_right_cap()` — regra universal "nenhum bloco invade x-range de outro bloco no mesmo y" (cap por vizinho TextBlock). (d) **Sessão #9: extensão do right-cap com cap por borda vertical** — quando célula vizinha está vazia (sem TextBlock), o cap usa a próxima borda vertical detectada como limite. 19/19 testes unitários passando (`tests/test_writer_neighbor_cap.py`). Genérico: independe de detectar "tabela" ou "rodapé" — aplica-se a qualquer PDF nativo (tabelas, multi-coluna, formulários, RFQs).
 - [x] **Problema 5: Glossário técnico** — ✅ resolvido (Sessão #6). Novo módulo `src/glossary.py` com classe `Glossary`: protect/restore de termos via placeholders `__GLOSS0__` antes de enviar ao provedor. `TranslationService` recebe `glossary` opcional. `pipeline.py` aceita `glossary_path` opcional. `app/glossaries.py`: `GlossaryStore` com persistência em JSON (`app/storage/glossaries/`). 5 endpoints REST (`POST/GET/PUT/DELETE /api/glossaries`). UI: dropdown para selecionar glossário + modal para criar/remover glossários com textarea `origem = destino`.
 
 #### Fase 2 — robustez
@@ -226,23 +233,19 @@ Problema 3 (granularidade de blocos / paragrafos): RESOLVIDO.
   - _build_block_text(): une spans no mesmo y visual com espaco, linhas em y diferente com \n.
   - Resultado: espacos vazios entre spans eliminados; paragrafos fluem naturalmente.
 
-Problema 4 (celulas de tabela): PARCIALMENTE RESOLVIDO. Pendencias em aberto.
-  RESOLVIDO:
-  - _split_by_columns() em grouper.py: detecta celulas no mesmo y com gap > 1.5x font_size
-    e as separa em sub-blocos. _COLUMN_GAP_RATIO = 1.5 (era 2.0; gap critico era 20.2pt,
-    threshold antigo era 22pt — nao separava; novo threshold = 16.5pt — separa).
-  - _get_page_vertical_lines() + _left_boundary() em writer.py: detecta bordas de tabela via
-    page.get_drawings() (linhas verticais finas |dx|<2pt, altura>=8pt; rects finos width<2pt).
-    Posiciona texto 4pt apos a borda detectada (fallback: 1pt).
-  PENDENTE — problema visual que "melhorou um pouco" mas nao esta 100%:
-  - Rodapes persistentes em tabelas do PDF de 42 paginas: o texto "Afry Document Number:"
-    e o numero de documento aparecem como rodape em todas as paginas. Quando estao na mesma
-    linha da tabela de rodape, os spans podem se misturar causando texto sobreposto ou
-    cortado na borda da celula.
-  - Causa raiz suspeitada: elementos que se repetem na mesma posicao em todas as paginas
-    (cabecalhos/rodapes de tabela nao sao separados como estrutura — sao apenas spans no
-    texto principal). Deteccao de blocos repetitivos entre paginas seria a solucao ideal
-    (Fase 2 scope), mas pode haver ajuste pontual possivel antes disso.
+Problema 4 (celulas de tabela / cabecalhos / rodapes): TOTALMENTE RESOLVIDO.
+  Tres camadas, todas genericas:
+  (a) _split_by_columns() em grouper.py (Sessao #5): separa celulas no mesmo y
+      com gap > 1.5x font_size.
+  (b) _get_page_vertical_lines() + _left_boundary() em writer.py (Sessao #7):
+      detecta bordas verticais reais via page.get_drawings() e posiciona o
+      x-inicial do texto 4pt apos a borda.
+  (c) _compute_right_cap() em writer.py (Sessao #8): right-cap dinamico.
+      Regra universal: nenhum bloco pode invadir x-range de outro bloco que
+      compartilhe faixa vertical (>= 2pt overlap). Sem vizinho a direita ->
+      margem da pagina (page_w - 30). Com vizinho -> min(neighbor.x0 - 3pt).
+      Constantes: _PAGE_RIGHT_MARGIN=30, _NEIGHBOR_SAFETY=3, _MIN_VERTICAL_OVERLAP=2.
+      11/11 testes unitarios passando (tests/test_writer_neighbor_cap.py).
 
 Problema 5 (glossario tecnico): RESOLVIDO.
   - src/glossary.py: Glossary com protect/restore via __GLOSS0__, __GLOSS1__, etc.
@@ -296,13 +299,13 @@ com separadores) sao retornados intactos. Ex: 109004798-001-SITE-F-0414, REV-01,
 
 === PROXIMO PASSO SUGERIDO ===
 
-Problema 4 pendente (rodapes/cabecalhos de tabela que se repetem em todas as
-paginas e causam texto sobreposto ou cortado). Avaliar:
-a) Se ha solucao generica suficientemente simples para implementar agora.
-b) Ou se deve ir para o backlog da Fase 2 (deteccao de blocos repetitivos).
-
-Depois: Fase 2 — suite de testes pre-producao com PDFs variados, deteccao de
-PDF escaneado, recuperacao de jobs.
+Fase 1 totalmente fechada. Iniciar Fase 2 — robustez para producao.
+1. Deteccao de PDF escaneado: pre-analise antes de aceitar o job; se nao houver
+   texto extraivel (raster/imagem), retornar erro amigavel via API.
+2. Suite de testes pre-producao: baixar 8-12 PDFs variados (relatorios, artigos,
+   manuais, formularios) e rodar no pipeline; coletar metricas e fixar regressoes.
+3. Recuperacao de jobs: persistir status e arquivo de saida alem do tempo de
+   conexao do browser; historico do usuario; expiracao apos X horas.
 
 Arquivo do briefing completo: briefing-tradutor-pdf.md
 Estado detalhado: PROGRESSO.md (o arquivo que voce acabou de ler)
@@ -311,6 +314,61 @@ Estado detalhado: PROGRESSO.md (o arquivo que voce acabou de ler)
 ---
 
 ## Histórico de sessões
+
+### Sessão #9 — 2026-05-24 (Opus)
+
+**Refinamento do right-cap: cap por borda vertical quando célula vizinha está vazia.**
+
+Motivação: a validação real do `document_pdf (1)_pt.pdf` (Google Translate) mostrou que a Sessão #8 deixou um caso pendente — tabelas com células vazias adjacentes permitiam que o texto traduzido atravessasse bordas visíveis (`Documento Afry` invadindo 4 células vazias na capa, tabela "ANEXOS I A VI"). Causa: `_compute_right_cap` só conhecia TextBlocks vizinhos; quando a célula à direita estava vazia (sem TextBlock), o cap caía na margem da página.
+
+Solução implementada em `src/writer.py`:
+- **Nova constante:** `_BORDER_RIGHT_MARGIN = 1.0` (gap mínimo entre texto e borda vertical à direita).
+- **`_compute_right_cap` estendido:** novo parâmetro opcional `v_lines: list[float] | None`. Adiciona fonte de cap "próxima borda vertical à direita" (filtra v_lines > bx1, pega a primeira que vem ordenada por `_get_page_vertical_lines`). O cap final é `min(neighbor_cap, border_cap, page_right_cap)`. Compatibilidade preservada: sem `v_lines` ou com lista vazia, comportamento equivale ao anterior.
+- **`write_translated_pdf_blocks`:** passa o `v_lines` já calculado por página (uma vez) para `_compute_right_cap`. Custo adicional: O(V) por bloco, com V tipicamente < 100 → microssegundos.
+
+Testes (`tests/test_writer_neighbor_cap.py`): 8 novos casos cobrindo legacy/None/empty v_lines, borda à direita sem vizinho, borda à esquerda ignorada, múltiplas bordas (pega mais próxima), neighbor + border (mín dos dois), border + neighbor (mín dos dois), e cenário real da tabela AFRY (bloco com 4 bordas vazias à direita). **Total: 19/19 testes passando** (11 originais + 8 novos).
+
+Validação visual com `document_pdf (1).pdf` + mock realista (~25% expansão):
+- Tabela AFRY: "Documento Afry" agora **contido na própria célula** (antes invadia 4).
+- "NN Aprovador de Documentoo (Carimbo ou Assinatura)" — contido.
+- "Geral Notas" — contido.
+- Tabela "ANEXOS" — labels respeitam células divisórias.
+- Texto corrido sem regressão.
+
+Caso residual identificado mas **fora do escopo da Sessão #9** (escopo do `grouper.py`, Problema 3): "Distribuição: Novo Nordisk - E AFRY BR - E" continua atravessando uma borda — causa é que o `grouper` combinou em um único TextBlock duas células adjacentes muito próximas. Como é UM bloco abrangendo duas células, o right-cap (que atua entre blocos) não consegue separá-las. Documentado para possível revisita futura se causar incômodo recorrente.
+
+Genericidade auditada: o refinamento usa apenas estruturas que o PyMuPDF já extrai (bordas via `page.get_drawings`). Funciona em qualquer PDF nativo com tabela bordada — tabelas, multi-coluna, formulários, RFQs, jornais, etc.
+
+Próximo: Fase 2 (detecção de PDF escaneado, suite de testes pré-produção, recuperação de jobs).
+
+### Sessão #8 — 2026-05-24 (Opus)
+
+**Problema 4 totalmente resolvido com right-cap dinâmico por vizinhos.**
+
+Motivação: Sessão #7 deixou Problema 4 parcialmente resolvido — `_split_by_columns` separava células na leitura, mas na ESCRITA o `draw_rect` ainda expandia até `page_w - 30pt`, permitindo que texto traduzido (PT ~25% mais longo) invadisse células vizinhas em tabelas. Causa identificada pela inspeção do código (não pelos sintomas reportados): faltava limite de expansão horizontal baseado em vizinhos.
+
+Solução implementada em `src/writer.py`:
+- **Novas constantes:** `_PAGE_RIGHT_MARGIN=30`, `_NEIGHBOR_SAFETY=3`, `_MIN_VERTICAL_OVERLAP=2` (todas em pt). Centralizadas para reutilização.
+- **`_vertical_overlap(a, b) -> float`**: sobreposição vertical entre dois bboxes em pt; zero se disjuntos.
+- **`_compute_right_cap(block_bbox, all_page_bboxes, page_w) -> float`**: regra universal "nenhum bloco invade x-range de outro bloco no mesmo y". Para cada bloco, filtra vizinhos a direita (`other.x0 > self.x1`) com sobreposição vertical ≥ 2pt; retorna `min(neighbor.x0 - safety)` limitado por margem da página. Sem vizinhos: `page_w - 30`. O próprio bloco é auto-excluído pelo filtro (`bx0 <= bx1`).
+- **Integração em `write_translated_pdf_blocks`**: pré-calcula lista de bboxes da página uma única vez por página (O(N²) total em vez de O(N³)); cada bloco usa `_compute_right_cap` para definir `bx1_safe`. Política preservada: nunca reduz abaixo do `bx1` original (não regride layouts onde bloco já era largo).
+- Substituição cosmética: `30.0` hardcoded no `write_translated_pdf` legado trocado por `_PAGE_RIGHT_MARGIN`.
+
+Testes (`tests/test_writer_neighbor_cap.py`): 11 casos cobrindo bloco isolado, vizinho no mesmo y, vizinho em y diferente, vizinho à esquerda, múltiplos vizinhos, sobreposição parcial, sobreposição negligível, cap pela margem da página, e linha de tabela de 3 colunas. **11/11 passando.**
+
+Validação visual:
+- `document_pdf (1).pdf` (25 págs) com mock agressivo +80% (extremo): capa renderizada — células `Approv.` e `Emission Purpose` da tabela de revisões respeitam vizinhos; tabela AFRY de baixo respeita estrutura. Casos onde texto não cabe nem em 6pt: trade-off correto (truncar vs invadir vizinho).
+- `document_pdf.pdf` (42 págs) com mock realista ~25%: páginas 5 e 15 visualmente íntegras — sem invasão entre células, texto corrido (bullets, parágrafos) fluindo natural, cabeçalho de tabela do topo limpo.
+
+Genericidade auditada: não há detecção de "tabela", "rodapé" ou conteúdo específico. A regra opera apenas sobre bboxes e sobreposição vertical — funciona em qualquer PDF nativo (tabelas, multi-coluna, formulários, RFQs, jornais, etc.).
+
+Custo computacional: O(N²) por página para o cálculo de right-caps. N tipicamente < 200 mesmo em PDFs densos → < 1ms por página. Escala linear com número de páginas.
+
+Validação com PDF real (Google Translate, `document_pdf (1)_pt.pdf`): layout ~95% íntegro. Texto corrido, listas, tabelas com colunas preenchidas, cabeçalhos de tabela, códigos de documento (`MOC4-08-9600-RFQ-004-AFRY`) — tudo limpo. Tradução técnica fluida ("Solicitação de cotação", "PROPONENTE", "CONTRATANTE", "Designer Líder do Projeto Executivo").
+
+**Issue residual identificado mas NÃO implementado** (créditos da sessão acabando, decisão do Miguel de adiar): tabelas com células vazias adjacentes (caso AFRY na capa, tabela "ANEXOS I A VI") permitem que o texto traduzido atravesse bordas verticais visíveis, porque o `_compute_right_cap` só conhece TextBlocks como vizinhos. Documentado na seção "Onde estamos agora" e no prompt de retomada como **PRIORIDADE 1 da próxima sessão**.
+
+Próximo: implementar extensão do right-cap com bordas verticais; depois Fase 2 (detecção de PDF escaneado, suite de testes pré-produção, recuperação de jobs).
 
 ### Sessão #7 — 2026-05-24
 

@@ -80,10 +80,33 @@ _FONT_SIZE_CANDIDATES_RATIOS = [1.0, 0.90, 0.80, 0.70]
 _FONT_SIZE_MINIMUM = 6.0
 _FONT_SIZE_FINE_STEP = 0.5
 
-# Padding interno aplicado ao lado esquerdo de cada bloco ao reescrever o texto.
-# Afasta o texto da borda vertical das celulas de tabela, evitando o artefato
-# cosmetico onde a linha divisora parece "cortar" a primeira letra do conteudo.
-_CELL_PADDING_LEFT = 2.0
+# Margem aplicada apos uma borda vertical detectada (via get_drawings).
+# Garante que o texto comece apos a linha divisora da tabela, nao sobre ela.
+_CELL_BORDER_MARGIN = 4.0   # pt apos a borda detectada
+_CELL_PADDING_LEFT  = 1.0   # fallback quando nenhuma borda e detectada nas proximidades
+
+# Distancia maxima (pt) para associar uma borda vertical ao bloco de texto.
+# Bordas dentro desse raio a esquerda de bx0 sao consideradas divisoras de celula.
+_BORDER_SEARCH_LEFT  = 15.0
+# Altura minima (pt) de uma linha para ser considerada borda de tabela.
+_BORDER_MIN_HEIGHT   = 8.0
+
+# Margem direita da pagina: distancia entre o final do texto traduzido e a
+# borda direita da pagina. Centraliza o valor usado por todos os helpers.
+_PAGE_RIGHT_MARGIN    = 30.0
+# Gap visual minimo (pt) entre o texto expandido e o bloco vizinho a direita.
+# Evita que o texto traduzido encoste na borda da celula vizinha em layouts
+# tabulares.
+_NEIGHBOR_SAFETY      = 3.0
+# Sobreposicao vertical minima (pt) para considerar dois blocos "na mesma faixa
+# de linha". Valores baixos podem pegar ruido de antialiasing; valores altos
+# perdem linhas reais de tabela em fontes pequenas. 2pt e seguro para fontes
+# 8-14pt comuns em documentos tecnicos.
+_MIN_VERTICAL_OVERLAP = 2.0
+# Distancia minima (pt) entre o texto traduzido e a proxima borda vertical
+# detectada a direita do bloco. Usado como cap quando a celula adjacente esta
+# vazia (sem TextBlock vizinho). 1pt e o suficiente para nao encostar.
+_BORDER_RIGHT_MARGIN  = 1.0
 
 
 def _detect_variant(flags: int, font: str) -> str:
@@ -122,6 +145,149 @@ def _int_color_to_rgb(c: int) -> Tuple[float, float, float]:
     g = ((c >> 8)  & 0xFF) / 255.0
     b = (c & 0xFF)          / 255.0
     return (r, g, b)
+
+
+def _get_page_vertical_lines(page: pymupdf.Page) -> list[float]:
+    """
+    Retorna coordenadas x de todas as linhas verticais significativas da pagina.
+
+    Detecta dois tipos de elemento grafico:
+    - Segmentos de linha ('l'): quase-verticais (|dx| < 2pt) e altos (dy >= 8pt).
+    - Retangulos finos ('re'): largura < 2pt e altura >= 8pt (bordas de tabela
+      frequentemente sao rects finos em vez de linhas puras).
+
+    O resultado e uma lista ordenada de x-coords unicas (arredondadas a 0.1pt).
+    Chamada uma vez por pagina durante a escrita; custo negligivel vs I/O do PDF.
+    """
+    v_lines: list[float] = []
+    for d in page.get_drawings():
+        for item in d.get("items", []):
+            if item[0] == "l":                    # segmento de linha
+                p1, p2 = item[1], item[2]
+                if abs(p1.x - p2.x) < 2.0 and abs(p1.y - p2.y) >= _BORDER_MIN_HEIGHT:
+                    v_lines.append(round((p1.x + p2.x) / 2.0, 1))
+            elif item[0] == "re":                 # retangulo
+                r = item[1]
+                if r.width < 2.0 and r.height >= _BORDER_MIN_HEIGHT:
+                    v_lines.append(round((r.x0 + r.x1) / 2.0, 1))
+    return sorted(set(v_lines))
+
+
+def _left_boundary(bx0: float, v_lines: list[float]) -> float:
+    """
+    Calcula o x de inicio de texto para um bloco, respeitando bordas verticais.
+
+    Procura a linha vertical mais proxima A ESQUERDA de bx0 (dentro de
+    _BORDER_SEARCH_LEFT pt). Se encontrada, usa border_x + _CELL_BORDER_MARGIN
+    como ponto de inicio, garantindo que o texto nao sobreponha a borda.
+    Se nenhuma borda for encontrada, usa bx0 + _CELL_PADDING_LEFT (minimo).
+
+    Genericidade: funciona com qualquer PDF que use linhas ou rects finos como
+    bordas de tabela — independente de tamanho de fonte, padding ou estilo.
+    """
+    # Candidatas: linhas dentro da janela de busca a esquerda de bx0
+    # (+1pt de tolerancia a direita para pegar bordas exatamente em bx0)
+    candidates = [x for x in v_lines
+                  if bx0 - _BORDER_SEARCH_LEFT <= x <= bx0 + 1.0]
+    if candidates:
+        border_x = max(candidates)   # a mais proxima a esquerda
+        return border_x + _CELL_BORDER_MARGIN
+    return bx0 + _CELL_PADDING_LEFT
+
+
+def _vertical_overlap(
+    bbox_a: Tuple[float, float, float, float],
+    bbox_b: Tuple[float, float, float, float],
+) -> float:
+    """
+    Retorna a sobreposicao vertical entre dois bboxes em pontos.
+    Zero se nao ha sobreposicao. Usado por _compute_right_cap.
+    """
+    overlap = min(bbox_a[3], bbox_b[3]) - max(bbox_a[1], bbox_b[1])
+    return max(0.0, overlap)
+
+
+def _compute_right_cap(
+    block_bbox: Tuple[float, float, float, float],
+    all_page_bboxes: List[Tuple[float, float, float, float]],
+    page_w: float,
+    v_lines: list[float] | None = None,
+) -> float:
+    """
+    Calcula o limite direito de escrita para um bloco.
+
+    Regra universal: nenhum bloco pode invadir (a) o espaco horizontal de outro
+    bloco que esteja na mesma faixa vertical, nem (b) uma borda vertical
+    detectada (linha divisora de celula de tabela). Esta heuristica NAO detecta
+    'tabela', 'rodape' ou qualquer estrutura especifica do PDF — aplica-se a
+    qualquer documento nativo de texto: layouts tabulares, jornais multi-coluna,
+    formularios, RFQs, etc.
+
+    Tres fontes de cap:
+    1. **Vizinho TextBlock a direita** com sobreposicao vertical >=
+       _MIN_VERTICAL_OVERLAP pt. Cap = neighbor.x0 - _NEIGHBOR_SAFETY.
+    2. **Proxima borda vertical** detectada via _get_page_vertical_lines.
+       Cap = primeira v_line > bx1, menos _BORDER_RIGHT_MARGIN. Importante
+       para celulas de tabela com vizinhos VAZIOS (sem TextBlock), onde a
+       borda visivel da celula e a unica pista de limite.
+    3. **Margem direita da pagina**: page_w - _PAGE_RIGHT_MARGIN.
+
+    O cap retornado e o minimo entre as fontes aplicaveis.
+
+    Genericidade garantida:
+    - Sem dependencia do conteudo dos blocos.
+    - Sem hardcoding de posicao/proporcao especifica.
+    - Comportamento bem definido tanto para textos corridos (sem vizinho/borda
+      a direita -> margem da pagina) quanto para layouts densos.
+
+    Args:
+        block_bbox: (x0, y0, x1, y1) do bloco a escrever.
+        all_page_bboxes: bboxes de TODOS os blocos da pagina. O proprio bloco
+                         pode estar incluido; o helper filtra-o automaticamente
+                         via condicao ox0 > bx1.
+        page_w: largura total da pagina em pt.
+        v_lines: lista ORDENADA de x-coords de bordas verticais da pagina,
+                 como retornada por _get_page_vertical_lines. Se None ou
+                 vazia, o cap por borda nao se aplica (comportamento legacy).
+
+    Returns:
+        x-coord do limite direito de escrita, sempre limitado pela margem da
+        pagina.
+
+    Custo: O(N + V) por chamada, onde N = blocos e V = bordas verticais na
+    pagina. Chamado uma vez por bloco -> O(N*(N+V)) por pagina, rapido para
+    PDFs reais (N tipicamente < 200, V tipicamente < 100).
+    """
+    bx0, by0, bx1, by1 = block_bbox
+    page_right_cap = page_w - _PAGE_RIGHT_MARGIN
+
+    # Fonte 1: vizinhos TextBlock a direita com sobreposicao vertical
+    neighbor_caps: list[float] = []
+    for ox0, oy0, ox1, oy1 in all_page_bboxes:
+        if ox0 <= bx1:
+            continue  # nao esta estritamente a direita (inclui o proprio bloco)
+        overlap = min(by1, oy1) - max(by0, oy0)
+        if overlap >= _MIN_VERTICAL_OVERLAP:
+            neighbor_caps.append(ox0 - _NEIGHBOR_SAFETY)
+
+    # Fonte 2: proxima borda vertical detectada a direita.
+    # v_lines vem ORDENADA de _get_page_vertical_lines, entao paramos no primeiro
+    # v > bx1 (o mais proximo a direita). Cobre o caso de celulas vizinhas vazias
+    # (sem TextBlock) onde so a borda visivel sinaliza o limite.
+    border_cap: float | None = None
+    if v_lines:
+        for v in v_lines:
+            if v > bx1:
+                border_cap = v - _BORDER_RIGHT_MARGIN
+                break
+
+    # Cap final = min entre todas as fontes aplicaveis
+    candidates = [page_right_cap]
+    if neighbor_caps:
+        candidates.append(min(neighbor_caps))
+    if border_cap is not None:
+        candidates.append(border_cap)
+    return min(candidates)
 
 
 def _register_noto_fonts(doc: pymupdf.Document) -> None:
@@ -268,7 +434,7 @@ def write_translated_pdf(
 
                 page_w    = span.page_w if span.page_w > 0 else page.rect.width
                 line_x1   = span.line_x1 if span.line_x1 > rect.x1 else rect.x1
-                right_cap = page_w - 30
+                right_cap = page_w - _PAGE_RIGHT_MARGIN
                 draw_right = min(line_x1 + 5, right_cap)
                 draw_right = max(draw_right, rect.x1)
 
@@ -305,6 +471,12 @@ def write_translated_pdf_blocks(
     - Eliminacao dos grandes espacos vazios entre segmentos traduzidos.
     - Traducao coerente de paragrafos inteiros (melhor qualidade linguistica).
     - Reducao de chamadas ao tradutor (um bloco = uma chamada).
+
+    [Problema 4] Right-cap dinamico por vizinhos:
+    O bbox de escrita expande horizontalmente apenas ate _NEIGHBOR_SAFETY pt
+    antes do bloco vizinho a direita que compartilhe faixa vertical. Sem
+    detectar 'tabela' especificamente -- aplica-se a qualquer PDF nativo:
+    layouts tabulares, multi-coluna, formularios, RFQs.
     """
     if len(blocks) != len(translations):
         raise ValueError(
@@ -326,13 +498,15 @@ def write_translated_pdf_blocks(
             page = doc[page_idx]
             _ensure_fonts_on_page(page)
 
+            # Pre-calcular linhas verticais da pagina (bordas de tabela)
+            v_lines = _get_page_vertical_lines(page)
+
             # 1) Apagar texto original span-a-span (precisao maxima)
             for block, translation in items:
                 if translation == block.text:
                     continue
                 for span in block.spans:
                     rect = pymupdf.Rect(span.bbox)
-                    # Pequena margem para cobrir antialiasing da fonte original
                     rect = pymupdf.Rect(
                         rect.x0 - 0.5, rect.y0 - 1.0,
                         rect.x1 + 0.5, rect.y1 + 1.0,
@@ -340,20 +514,37 @@ def write_translated_pdf_blocks(
                     page.draw_rect(rect, color=None, fill=(1, 1, 1), overlay=True)
 
             # 2) Escrever texto traduzido no bbox do bloco
+            # Pre-calcular bboxes de todos os blocos da pagina (uma unica vez)
+            # para o calculo de right_cap. Evita recomputar lista em cada
+            # iteracao do loop interno.
+            page_block_bboxes = [b.bbox for b, _ in items]
+
             for block, translation in items:
                 if translation == block.text:
                     continue
 
-                # bbox do bloco com pequena margem vertical
                 bx0, by0, bx1, by1 = block.bbox
                 page_w = block.page_w if block.page_w > 0 else page.rect.width
 
-                # Cap na margem da pagina (30pt de seguranca)
-                right_cap = page_w - 30.0
-                bx1_safe = min(bx1, right_cap)
+                # Limite direito generico: respeita (a) vizinhos TextBlock no
+                # mesmo y e (b) a proxima borda vertical detectada a direita
+                # (cobre celulas de tabela com vizinhos vazios). Aplica-se a
+                # qualquer PDF nativo.
+                right_cap = _compute_right_cap(
+                    block.bbox, page_block_bboxes, page_w, v_lines
+                )
+
+                # Politica: nunca reduzir abaixo do bx1 original (preserva
+                # layouts onde o bloco original ja era largo). Permite
+                # expansao ate o cap calculado, respeitando margem da pagina.
+                bx1_safe = bx1
+                if right_cap > bx1:
+                    bx1_safe = min(right_cap, page_w - _PAGE_RIGHT_MARGIN)
                 bx1_safe = max(bx1_safe, bx0 + 10.0)  # largura minima de 10pt
 
-                draw_rect = pymupdf.Rect(bx0 + _CELL_PADDING_LEFT, by0 - 1.0, bx1_safe, by1 + 2.0)
+                # Posicionamento horizontal: respeita bordas de tabela detectadas
+                left_start = _left_boundary(bx0, v_lines)
+                draw_rect = pymupdf.Rect(left_start, by0 - 1.0, bx1_safe, by1 + 2.0)
 
                 variant  = _detect_variant(block.flags, block.font)
                 fontname = _variant_to_fontname(variant)
