@@ -10,9 +10,9 @@
 
 **Fase atual:** Fase 1 — Qualidade de tradução e robustez.
 
-**Última sessão:** 2026-05-24 (Sessão #6). Problema 3 encerrado (padding de célula) + Problema 5 concluído (glossário técnico).
+**Última sessão:** 2026-05-24 (Sessão #6/7). Correções genéricas de tabela e códigos de documento aplicadas.
 
-**Próximo bloco de trabalho:** A definir com Miguel — Fase 1 completa (Problemas 1–3 + 5). Problema 4 real (cabeçalhos/rodapés persistentes) ou avançar para Fase 2 (robustez). Sonnet.
+**Próximo bloco de trabalho:** Problema 4 pendente (rodapés/cabeçalhos de tabela persistentes em todas as páginas — texto sobreposto). Avaliar solução genérica vs. backlog Fase 2. **Usar Opus para esta sessão em diante.**
 
 ---
 
@@ -37,12 +37,13 @@
 | Problema 1 — expansão de texto (ajuste de bbox, font-size) | **Sonnet** | Engenharia direta, sem ambiguidade |
 | Problema 2 — fontes Unicode | ~~Sonnet~~ ✅ concluído | — |
 | Problema 3 — agrupamento de parágrafos | **Sonnet** (início) → avaliar Opus | Heurística moderada; se a detecção de blocos lógicos ficar complexa, escalar para Opus |
-| Problema 4 — cabeçalhos/rodapés/tabelas | **Sonnet** | Detecção por posição e heurística |
-| Problema 5 — glossário técnico | **Sonnet** | CRUD de JSON/YAML |
+| Problema 4 — cabeçalhos/rodapés/tabelas | **Opus** ← ATUAL | Detectar blocos repetitivos entre páginas; heurística mais complexa |
+| Problema 5 — glossário técnico | ~~Sonnet~~ ✅ concluído | — |
+| Fase 2 — suite de testes, detecção de PDF escaneado | **Opus** | Decisões de estratégia de testes e edge cases |
 | Arquitetura de produto (Fase 3 — decisão A/B/C) | **Opus** | Decisão estratégica de alto impacto |
 | Auth + Billing real | **Sonnet** | Implementação padrão |
 
-**Resumo:** Sonnet dá conta de toda a Fase 1. Só escalar para Opus quando chegar em decisões arquiteturais/estratégicas de produto (Fase 3) ou se o Problema 3 virar algo realmente complexo.
+**Resumo:** Migrado para Opus a partir da Sessão #8. Problema 4 (rodapés/cabeçalhos) envolve heurística de detecção de blocos repetitivos — tarefa adequada para Opus. Fase 3 em diante também Opus para decisões arquiteturais.
 
 ---
 
@@ -175,38 +176,153 @@ GET /api/jobs/{id}/download  (PDF traduzido)
 
 ## Prompt de retomada
 
-> Cole o bloco abaixo numa nova sessão do Cowork para retomar exatamente de onde paramos.
+> Cole o bloco abaixo numa nova sessão do Cowork (Opus recomendado) para retomar exatamente de onde paramos.
 
 ```
 Estou retomando o projeto Tradutor PDF (preservacao de layout).
+Sou Miguel, Automation Specialist.
 
-Contexto rapido:
-- Sou Miguel, Automation Specialist. Quero uma ferramenta que traduz PDFs
-  preservando layout, fontes e branding.
-- O briefing completo esta em briefing-tradutor-pdf.md.
-- O estado atual e o que ja foi feito esta em PROGRESSO.md (LEIA esse arquivo
-  primeiro, ele tem a verdade do projeto).
+=== LEIA ANTES DE QUALQUER COISA ===
+1. Leia PROGRESSO.md inteiro — ele tem o estado real do projeto.
+2. Leia src/writer.py, src/grouper.py, src/translator.py — os tres arquivos
+   com mudancas recentes.
+3. Confirme comigo qual e o proximo passo ANTES de codificar qualquer coisa.
 
-Decisoes ja tomadas que estao no PROGRESSO.md:
-- Tradutor gratuito (Google via deep-translator) na Fase 0; trocar depois.
-- Piloto fullstack desde o inicio (FastAPI + HTML/Tailwind), nao CLI mininal.
-- Tradutcao crua na Fase 0; os 5 problemas tecnicos do briefing ficam para
-  Fase 1+.
-- Multi-idioma e hooks de auth/billing arquitetados desde ja, mas em stub.
+=== CONTEXTO TECNICO (estado atual — Sessao #7) ===
 
-Antes de seguir, por favor:
-1. Leia PROGRESSO.md inteiro.
-2. Cheque o checklist e me diga em que item paramos.
-3. Confirme comigo qual e o proximo passo antes de codificar.
-4. Trabalhe iterativamente, atualize PROGRESSO.md ao fim de cada milestone, e
-   sugira commits descritivos para eu rodar.
+Stack: FastAPI + PyMuPDF + deep-translator (Google/MyMemory). Windows, Python 3.11.
+Pasta do projeto: C:\Users\migms\Documents\Tradutor_PDF
 
-Paths sem acentos, ambiente Windows.
+Pipeline (src/):
+  extractor.py  -> extrai TextSpan (page, block, line, span, bbox, font, size, color, flags, page_w, line_x1)
+  grouper.py    -> agrupa spans em TextBlock por (page, block_idx); detecta celulas de tabela
+  translator.py -> TranslationService com cache, fallback MyMemory, protect/restore de chars especiais e glossario
+  glossary.py   -> Glossary com protect/restore de termos via placeholders __GLOSS0__
+  pipeline.py   -> orquestrador; aceita glossary_path opcional
+  writer.py     -> apaga texto original (draw_rect branco), reescreve traduzido; deteccao de bordas de tabela
+
+Backend (app/):
+  main.py       -> FastAPI; endpoints de traducao, jobs, glossarios
+  jobs.py       -> JobStore em memoria, thread-safe
+  glossaries.py -> GlossaryStore com persistencia JSON em app/storage/glossaries/
+
+Frontend: app/templates/index.html (Tailwind CDN, drag-and-drop, progress, download, modal de glossarios)
+
+=== OS 5 PROBLEMAS DA FASE 1 — STATUS ===
+
+Problema 1 (expansao de texto): RESOLVIDO.
+  - writer.py usa draw_rect com espaco real da linha (line_x1 - bx0), cap em page_w - 30pt.
+  - Reducao de fonte em 3 passos (90/80/70%) + descida fina; minimo 6pt.
+  - Resultado: 229 overflows -> 0.
+
+Problema 2 (fontes Unicode): RESOLVIDO.
+  - NotoSans (via pymupdf-fonts) substitui fontes base14 Latin-1.
+  - writer.py detecta bold/italic pelo campo flags e usa variante certa.
+  - translator.py protege –, •, ', ", ©, ° etc. via placeholders antes de enviar ao Google.
+  - Resultado: zero "?" no documento inteiro.
+
+Problema 3 (granularidade de blocos / paragrafos): RESOLVIDO.
+  - grouper.py agrupa spans em TextBlock por (page, block_idx). Pipeline traduz por bloco.
+  - _build_block_text(): une spans no mesmo y visual com espaco, linhas em y diferente com \n.
+  - Resultado: espacos vazios entre spans eliminados; paragrafos fluem naturalmente.
+
+Problema 4 (celulas de tabela): PARCIALMENTE RESOLVIDO. Pendencias em aberto.
+  RESOLVIDO:
+  - _split_by_columns() em grouper.py: detecta celulas no mesmo y com gap > 1.5x font_size
+    e as separa em sub-blocos. _COLUMN_GAP_RATIO = 1.5 (era 2.0; gap critico era 20.2pt,
+    threshold antigo era 22pt — nao separava; novo threshold = 16.5pt — separa).
+  - _get_page_vertical_lines() + _left_boundary() em writer.py: detecta bordas de tabela via
+    page.get_drawings() (linhas verticais finas |dx|<2pt, altura>=8pt; rects finos width<2pt).
+    Posiciona texto 4pt apos a borda detectada (fallback: 1pt).
+  PENDENTE — problema visual que "melhorou um pouco" mas nao esta 100%:
+  - Rodapes persistentes em tabelas do PDF de 42 paginas: o texto "Afry Document Number:"
+    e o numero de documento aparecem como rodape em todas as paginas. Quando estao na mesma
+    linha da tabela de rodape, os spans podem se misturar causando texto sobreposto ou
+    cortado na borda da celula.
+  - Causa raiz suspeitada: elementos que se repetem na mesma posicao em todas as paginas
+    (cabecalhos/rodapes de tabela nao sao separados como estrutura — sao apenas spans no
+    texto principal). Deteccao de blocos repetitivos entre paginas seria a solucao ideal
+    (Fase 2 scope), mas pode haver ajuste pontual possivel antes disso.
+
+Problema 5 (glossario tecnico): RESOLVIDO.
+  - src/glossary.py: Glossary com protect/restore via __GLOSS0__, __GLOSS1__, etc.
+    Matching case-insensitive, sorted by term length desc para evitar conflitos.
+  - TranslationService aceita glossary opcional; protect antes de _protect(), restore depois de _restore().
+  - app/glossaries.py: GlossaryStore (JSON em disco).
+  - 5 endpoints REST: POST/GET/GET/PUT/DELETE /api/glossaries.
+  - UI: dropdown de selecao + modal criar/remover com textarea "origem = destino".
+
+=== MUDANCAS RECENTES IMPORTANTES EM writer.py ===
+
+Constantes atuais de posicionamento:
+  _CELL_BORDER_MARGIN  = 4.0  # pt apos a borda detectada
+  _CELL_PADDING_LEFT   = 1.0  # fallback sem borda proxima
+  _BORDER_SEARCH_LEFT  = 15.0 # range de busca a esquerda de bx0
+  _BORDER_MIN_HEIGHT   = 8.0  # altura minima para contar como borda
+
+Funcao _get_page_vertical_lines(page): percorre page.get_drawings(), filtra linhas
+verticais e rects finos, retorna lista de x-coords de bordas.
+
+Funcao _left_boundary(bx0, v_lines): encontra a borda mais proxima a esquerda
+(dentro de _BORDER_SEARCH_LEFT), retorna border_x + _CELL_BORDER_MARGIN, ou
+bx0 + _CELL_PADDING_LEFT como fallback.
+
+Em write_translated_pdf_blocks(): por pagina, chama _get_page_vertical_lines(page).
+Por bloco, chama _left_boundary(bx0, v_lines) para obter left_start do draw_rect.
+
+=== MUDANCAS RECENTES EM translator.py ===
+
+_DOC_CODE_RE = re.compile(r"^[A-Z0-9]{1,}([-./][A-Z0-9]{1,})+$")
+Adicionado em _is_untranslatable(): codigos tecnicos (sem espacos, maiusculas+digitos
+com separadores) sao retornados intactos. Ex: 109004798-001-SITE-F-0414, REV-01, A-01.
+
+=== REGRAS DE TRABALHO ===
+
+1. SEMPRE confirme o proximo passo comigo antes de escrever qualquer codigo.
+2. Solucoes devem ser GENERICAS — nao especificas aos meus 2 PDFs de exemplo.
+   O site vai receber PDFs de todo tipo. Se a solucao so funciona para um caso
+   especifico, nao serve.
+3. Trabalhe iterativamente: um problema de cada vez, testa, depois avanca.
+4. Atualize PROGRESSO.md ao fim de cada milestone.
+5. Ao fim de cada etapa, envie o comando git completo para eu rodar (com
+   mensagem descritiva; use multiplos -m se precisar de multilinhas — nao use
+   em-dash ou unicode no commit message, PowerShell nao suporta).
+6. Paths sem acentos, ambiente Windows.
+7. Arquivos Python devem ser escritos via bash python3 em UTF-8 (o Write tool
+   do Cowork gera UTF-16 no mount Windows — nao usar Write para .py).
+8. Claude pode renderizar paginas do PDF diretamente com PyMuPDF (nao precisa
+   de screenshot manual do Miguel).
+9. Ao fim de cada etapa, informe o criterio de aceitacao para eu testar.
+
+=== PROXIMO PASSO SUGERIDO ===
+
+Problema 4 pendente (rodapes/cabecalhos de tabela que se repetem em todas as
+paginas e causam texto sobreposto ou cortado). Avaliar:
+a) Se ha solucao generica suficientemente simples para implementar agora.
+b) Ou se deve ir para o backlog da Fase 2 (deteccao de blocos repetitivos).
+
+Depois: Fase 2 — suite de testes pre-producao com PDFs variados, deteccao de
+PDF escaneado, recuperacao de jobs.
+
+Arquivo do briefing completo: briefing-tradutor-pdf.md
+Estado detalhado: PROGRESSO.md (o arquivo que voce acabou de ler)
 ```
 
 ---
 
 ## Histórico de sessões
+
+### Sessão #7 — 2026-05-24
+
+**Correções genéricas de tabela e documento (não-específicas aos PDFs de exemplo):**
+
+- **`src/grouper.py`** — `_COLUMN_GAP_RATIO`: 2.0 → 1.5. Causa raiz do "Docu|mentos": gap real entre colunas (20.2pt) ficava abaixo do threshold antigo (22pt) e não separava. Com 1.5, threshold = 16.5pt → separa corretamente. Genérico: funciona para qualquer tabela onde o gap de coluna > 1.5× o tamanho da fonte.
+
+- **`src/writer.py`** — Substituído padding fixo (`_CELL_PADDING_LEFT = 2pt`) por detecção real de bordas via `page.get_drawings()`. Novas funções `_get_page_vertical_lines()` e `_left_boundary()`: detectam linhas/rects verticais finos (bordas de tabela) e posicionam o texto 4pt após a borda detectada. Fallback de 1pt quando não há borda próxima. Genérico: funciona com qualquer PDF que represente bordas de tabela como linhas ou rects finos.
+
+- **`src/translator.py`** — `_DOC_CODE_RE`: novo regex para detectar códigos técnicos de documento (ex: `109004798-001-SITE-F-0414`, `REV-01`, `A-01`) como intraduzíveis. Critério: sem espaços, maiúsculas/dígitos com separadores (-, ., /). Genérico: preserva qualquer código técnico nesse formato sem intervenção do usuário.
+
+- Todos os três testes unitários passaram: column split, border detection, doc code protection.
 
 ### Sessão #6 — 2026-05-24
 - Fix cosmético em `writer.py`: adicionada constante `_CELL_PADDING_LEFT = 2.0` e aplicada ao `draw_rect` de `write_translated_pdf_blocks()` (`bx0 + _CELL_PADDING_LEFT`). Corrige artefato visual de "texto cortado" pela linha divisória de células de tabela.
