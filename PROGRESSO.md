@@ -91,7 +91,7 @@
 - [x] **Problema 2: Fontes sem charset Unicode** — ✅ resolvido (Sessão #2/3). NotoSans via `pymupdf-fonts` elimina "?" de acentos. Fix adicional no `translator.py`: protect/restore de `–`, `•`, `'`, `"`, `©`, `°` etc. antes de enviar ao Google Translate (que os malhava para `?`). Spans com apenas símbolos/números pulam a tradução.
 - [x] **Problema 1: Expansão de texto** — ✅ resolvido (Sessão #4). `extractor.py`: adicionado `line_x1` e `page_w` ao TextSpan. `writer.py`: draw_rect usa espaço real da linha + cap na margem da página (30pt). Redução de fonte em 3 passos (90/80/70%) antes da descida fina. Mínimo de 6pt (era 4pt). 229 overflows → 0.
 - [x] **Problema 3: Granularidade de blocos** — ✅ resolvido (Sessão #5). Novo módulo `src/grouper.py` agrupa spans em TextBlocks por (page, block_idx). `pipeline.py` traduz por bloco (2.2× menos chamadas ao tradutor). `writer.py` escreve texto traduzido no bbox do bloco inteiro — elimina os grandes espaços vazios entre spans. Fix de linha visual: spans no mesmo y são unidos com espaço (campos tabulados); linhas em y diferente usam \n. Validado com PDF mock (25 págs, 680 blocos).
-- [ ] **Problema 4: Cabeçalhos/rodapés/tabelas** — detecção heurística e tratamento especial
+- [x] **Problema 4: Tabelas (células multi-coluna)** — ✅ resolvido (Sessão #5). `grouper.py`: novo `_split_by_columns()` detecta spans na mesma y-visual com grandes gaps horizontais (> 2× font_size) e os divide em sub-blocos individuais por célula. Parágrafos multi-linha não são afetados. Blocos: 680 → 1049 (inclui 369 sub-blocos de células de tabela). Cabeçalhos/rodapés persistentes a tratar em Problema 4 real.
 - [ ] **Problema 5: Glossário técnico** — sistema de termos protegidos (JSON/YAML por projeto)
 
 #### Fase 2 — robustez
@@ -249,6 +249,7 @@ Paths sem acentos, ambiente Windows.
 ### Sessão #5 — 2026-05-23
 - Problema 1 aceito por Miguel: critério cumprido (zero overflows fora da página).
 - Nota de produto: criar suite de testes pré-produção — baixar PDFs variados da internet e rodar no app para validar edge cases reais antes do lançamento.
+- Fix crítico de tabelas: novo _split_by_columns() no grouper.py — detecta células de tabela (spans no mesmo y com gap > 2x font_size) e as divide em sub-blocos independentes. Parágrafos não afetados. Corrige o zoado da tabela de capa reportado pelo Miguel.
 - Problema 3 CONCLUÍDO: novo src/grouper.py (TextBlock, group_into_blocks); pipeline.py usa blocos; writer.py escreve por bloco.
 - Fix crítico no grouper: spans no mesmo y visual (campos tabulados, ex: "1." + "INTRODUCTION..." na TOC) são unidos com espaço em vez de \n. Linhas em y diferente usam \n (listas, títulos multi-linha).
 - Resultado: TOC com entradas completas, parágrafos fluindo naturalmente, lista de Annex titles com quebras corretas.

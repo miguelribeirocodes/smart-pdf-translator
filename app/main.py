@@ -181,7 +181,7 @@ def _run_translation(
             page_count=result.page_count,
             span_count=result.span_count,
             cache_hits=result.cache_hits,
-            failed_spans=result.failed_spans,
+            failed_spans=result.failed_blocks,
             finished_at=_dt.utcnow(),
         )
     except Exception as e:  # noqa: BLE001

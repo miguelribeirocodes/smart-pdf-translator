@@ -116,6 +116,60 @@ def _build_block_text(spans: List[TextSpan]) -> str:
     return "".join(result_parts)
 
 
+# Gap horizontal minimo para considerar separacao de coluna de tabela:
+# gap > font_size * _COLUMN_GAP_RATIO -> celulas separadas.
+# Valor 2.0 fica acima do espaco entre palavras (~0.3x) mas abaixo de
+# qualquer espacamento de coluna real (tipicamente 3-10x font_size).
+_COLUMN_GAP_RATIO = 2.0
+# Tolerancia de y para determinar "mesma linha visual" entre spans:
+_SAME_ROW_Y_TOL = 2.0  # pt
+
+
+def _split_by_columns(spans: List[TextSpan]) -> List[List[TextSpan]]:
+    """
+    Divide spans de um bloco em grupos de colunas quando ha grandes lacunas
+    horizontais entre eles — indicativo de celulas de tabela numa mesma linha.
+
+    Logica:
+    1. Se todos os spans (incluindo os de line_idx distintos) compartilham o
+       mesmo y-centro (diferenca < _SAME_ROW_Y_TOL), estamos numa linha de
+       tabela onde cada celula foi mapeada para um line_idx proprio pelo
+       PyMuPDF (campos tabulados).
+    2. Se as linhas tem y-centros distintos (paragrafo real), nao dividir.
+    3. Para o caso de linha unica (ou multiplos line_idx no mesmo y), ordenar
+       por x0 e dividir onde gap > font_size * _COLUMN_GAP_RATIO.
+    """
+    if len(spans) <= 1:
+        return [spans]
+
+    # Calcular y-centro de cada line_idx
+    line_ys: Dict[int, List[float]] = {}
+    for s in spans:
+        line_ys.setdefault(s.line, []).append((s.bbox[1] + s.bbox[3]) / 2.0)
+    line_centers = {li: sum(ys) / len(ys) for li, ys in line_ys.items()}
+
+    # Se ha mais de uma linha e elas tem y distintos -> paragrafo, nao dividir
+    sorted_centers = sorted(line_centers.values())
+    for i in range(1, len(sorted_centers)):
+        if sorted_centers[i] - sorted_centers[i - 1] > _SAME_ROW_Y_TOL:
+            return [spans]  # paragrafo multi-linha
+
+    # Todos os spans estao no mesmo y visual (linha de tabela ou span unico):
+    # ordenar por x0 e procurar gaps de coluna
+    sorted_spans = sorted(spans, key=lambda s: s.bbox[0])
+    avg_size = sum(s.size for s in spans) / len(spans)
+    gap_threshold = avg_size * _COLUMN_GAP_RATIO
+
+    groups: List[List[TextSpan]] = [[sorted_spans[0]]]
+    for i in range(1, len(sorted_spans)):
+        gap = sorted_spans[i].bbox[0] - sorted_spans[i - 1].bbox[2]
+        if gap > gap_threshold:
+            groups.append([])
+        groups[-1].append(sorted_spans[i])
+
+    return groups if len(groups) > 1 else [spans]
+
+
 def _dominant_span(spans: List[TextSpan]) -> TextSpan:
     """
     Retorna o span 'dominante' do bloco para fins de estilo.
@@ -142,19 +196,23 @@ def group_into_blocks(spans: List[TextSpan]) -> List[TextBlock]:
     blocks: List[TextBlock] = []
     for (page, block_idx) in sorted(groups):
         block_spans = sorted(groups[(page, block_idx)], key=lambda s: (s.line, s.span))
-        dom = _dominant_span(block_spans)
 
-        blocks.append(TextBlock(
-            page=page,
-            block_idx=block_idx,
-            spans=block_spans,
-            text=_build_block_text(block_spans),
-            bbox=_union_bbox(block_spans),
-            font=dom.font,
-            size=dom.size,
-            color=dom.color,
-            flags=dom.flags,
-            page_w=block_spans[0].page_w,
-        ))
+        # Dividir em sub-blocos de coluna se necessario (celulas de tabela)
+        col_groups = _split_by_columns(block_spans)
+
+        for col_spans in col_groups:
+            dom = _dominant_span(col_spans)
+            blocks.append(TextBlock(
+                page=page,
+                block_idx=block_idx,
+                spans=col_spans,
+                text=_build_block_text(col_spans),
+                bbox=_union_bbox(col_spans),
+                font=dom.font,
+                size=dom.size,
+                color=dom.color,
+                flags=dom.flags,
+                page_w=col_spans[0].page_w,
+            ))
 
     return blocks
