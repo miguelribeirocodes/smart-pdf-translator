@@ -20,7 +20,7 @@ from .extractor import extract_spans, page_count
 from .glossary import Glossary
 from .grouper import group_into_blocks
 from .translator import TranslationService
-from .writer import write_translated_pdf_blocks
+from .writer import write_translated_pdf_blocks, _get_page_vertical_lines
 
 log = logging.getLogger(__name__)
 
@@ -105,8 +105,26 @@ def translate_pdf(
             failed_blocks=0,
         )
 
-    # --- Agrupamento em blocos (Problema 3) ---
-    blocks = group_into_blocks(spans)
+    # --- Deteccao de bordas verticais (Sessao #10) ---
+    # Pre-calcular bordas verticais por pagina para o grouper usar como sinal
+    # adicional de separacao de celulas adjacentes coladas. O writer tambem
+    # recalcula essas bordas na fase de escrita; o custo e baixo (O(drawings)).
+    _report("Detectando bordas verticais (tabelas)", 12.0)
+    import pymupdf
+    v_lines_by_page: dict[int, list[float]] = {}
+    _doc = pymupdf.open(input_pdf)
+    try:
+        for _p_idx in range(len(_doc)):
+            v_lines_by_page[_p_idx] = _get_page_vertical_lines(_doc[_p_idx])
+    finally:
+        _doc.close()
+    _report(
+        f"Bordas verticais detectadas em {sum(1 for v in v_lines_by_page.values() if v)} paginas",
+        13.0,
+    )
+
+    # --- Agrupamento em blocos (Problema 3 + Sessao #10 refinamento) ---
+    blocks = group_into_blocks(spans, v_lines_by_page=v_lines_by_page)
     _report(
         f"Agrupados em {len(blocks)} blocos (era {len(spans)} spans individuais)",
         15.0,

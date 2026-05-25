@@ -8,18 +8,33 @@
 
 ## Onde estamos agora
 
-**Fase atual:** Fase 1 — Qualidade de tradução e robustez. **Concluída.**
+**Fase atual:** Fase 1 — Qualidade de tradução e robustez. **Os 5 problemas do briefing estão resolvidos no básico**, MAS PDF nativo **ainda NÃO está 100% pronto pra produção**. Resta validação em PDFs variados e correção dos casos que aparecerem.
 
-**Última sessão:** 2026-05-24 (Sessão #9 — Opus). Refinamento do right-cap por bordas verticais: tabelas com células vazias vizinhas agora também são protegidas.
+**Última sessão:** 2026-05-24 (Sessão #9 — Opus). Refinamento do right-cap por bordas verticais. Discussão honesta com Miguel: identificamos que pular para "PDF escaneado" agora seria prematuro.
 
-**Próximo bloco de trabalho:** Fase 2 — robustez/produção:
-1. Detecção de PDF escaneado (bloquear na API com mensagem clara).
-2. Suite de testes pré-produção com PDFs variados da internet (relatórios, artigos, manuais, formulários).
-3. Recuperação de jobs (histórico + persistência além do browser fechado).
+**Limitações conhecidas em PDF nativo (precisam ser endereçadas ANTES de seguir):**
 
-Caso residual NÃO relacionado à Sessão #9 (escopo do grouper.py, Problema 3): em algumas linhas de tabela com 2 colunas adjacentes muito próximas, o grouper pode combinar células em um TextBlock único. Quando isso acontece, o right-cap (que atua entre blocos) não consegue separar. Exemplo observado: "Distribuição: Novo Nordisk - E AFRY BR - E" na capa do `document_pdf (1).pdf`. Pode ser revisitado se causar incômodo recorrente.
+1. ~~**Grouper combina células adjacentes coladas**~~ — ✅ **RESOLVIDO na Sessão #10**. `_split_by_columns` agora aceita `v_lines` opcional e usa bordas verticais detectadas como sinal adicional de separação (qualquer borda no gap entre 2 spans no mesmo y → split). `pipeline.py` calcula bordas por página antes de agrupar. 9/9 testes passando (`tests/test_grouper_borders.py`). Caso AFRY do `document_pdf (1).pdf` validado: 1 bloco → 3 blocos separados. Identificados +17 casos similares no mesmo PDF que também foram corrigidos.
 
-Modelo sugerido: Sonnet para Fase 2 implementação rotineira; Opus para decisões de estratégia de testes e edge cases.
+2. **Caracteres especiais aparecem como □ (glifos ausentes)** — alguns bullets e símbolos específicos do PDF original não têm mapeamento direto na NotoSans (pymupdf-fonts). Visto em listas com `❑` na página 7 do `document_pdf (1)_pt.pdf`.
+
+3. **Tradução grande não cabe em célula estreita** — em tabelas com colunas estreitas, mesmo reduzindo fonte a 6pt o `insert_textbox` pode falhar (retorna -1, não escreve nada). Resultado: célula traduzida fica vazia. Visto em casos extremos com mock pesado.
+
+4. **Tabelas sem bordas visíveis** — right-cap depende de vizinhos TextBlock OU bordas verticais detectadas via `get_drawings`. Tabelas alinhadas por espaços (sem linhas divisórias visíveis) e com células vazias caem em terra de ninguém.
+
+5. **Sumário (TOC) com dot leaders inconsistentes** — TOC tem padrão `numerador + título + ............ + número de página`. No PDF original esses três (título + dots + número) vivem num único span gerado pelo Word com dots calculados pra preencher exatamente o espaço. Pipeline manda tudo pro Google que devolve quantidade arbitrária de dots; resultado pode ter dots cortados, espaçados, ou colando no número da página. Numerador também aparece com retângulo branco visível ao redor (resíduo do cover do span original que era curto). Identificado na Sessão #9 inspecionando bloco 12 do `document_pdf.pdf` (TOC página 2). Possível solução: detectar padrão `texto + dots + número`, traduzir só o título, regerar dots para preencher espaço calculado. Decisão Miguel: postergar; pode ser irrelevante em PDFs sem TOC.
+
+6. **Suite de testes real é mínima** — só validamos nos 2 PDFs do Miguel (`document_pdf.pdf` 42p e `document_pdf (1).pdf` 25p). Falta bateria com PDFs variados da internet.
+
+**Próximo bloco de trabalho (ORDEM CORRIGIDA):**
+
+1. **PRIORIDADE 1: Suite de testes com PDFs variados da internet** — baixar 8-12 PDFs diversos (relatórios públicos, artigos científicos, manuais técnicos, formulários, faturas, contratos), rodar no pipeline com Google Translate real, coletar falhas, catalogar.
+2. **PRIORIDADE 2: Corrigir os casos que aparecerem** — provavelmente refinamentos no grouper, fontes, e right-cap. Cada correção precisa de teste unitário pra travar regressão.
+3. **PRIORIDADE 3: Recuperação de jobs** — persistência além do browser fechado, histórico de jobs por usuário, expiração após X horas. UX importante quando PDFs grandes demoram.
+
+**Detecção/tradução de PDF escaneado:** **postergada para depois do site estar rodando em produção** (decisão do Miguel na Sessão #9). Só faz sentido como evolução de produto, não como pré-requisito técnico. Ver Fase 4 abaixo.
+
+Modelo sugerido: Opus para estratégia de testes (P1) e diagnóstico das falhas (P2 — heurísticas no grouper); Sonnet para correções mecânicas e implementação de jobs.
 
 ---
 
@@ -102,12 +117,20 @@ Modelo sugerido: Sonnet para Fase 2 implementação rotineira; Opus para decisõ
 - [x] **Problema 4: Tabelas / cabeçalhos / rodapés** — ✅ TOTALMENTE resolvido. (a) Sessão #5: `_split_by_columns()` detecta células de tabela por gap horizontal. (b) Sessão #7: detecção de bordas verticais via `page.get_drawings()` para posicionamento do x-inicial. (c) Sessão #8: `_compute_right_cap()` — regra universal "nenhum bloco invade x-range de outro bloco no mesmo y" (cap por vizinho TextBlock). (d) **Sessão #9: extensão do right-cap com cap por borda vertical** — quando célula vizinha está vazia (sem TextBlock), o cap usa a próxima borda vertical detectada como limite. 19/19 testes unitários passando (`tests/test_writer_neighbor_cap.py`). Genérico: independe de detectar "tabela" ou "rodapé" — aplica-se a qualquer PDF nativo (tabelas, multi-coluna, formulários, RFQs).
 - [x] **Problema 5: Glossário técnico** — ✅ resolvido (Sessão #6). Novo módulo `src/glossary.py` com classe `Glossary`: protect/restore de termos via placeholders `__GLOSS0__` antes de enviar ao provedor. `TranslationService` recebe `glossary` opcional. `pipeline.py` aceita `glossary_path` opcional. `app/glossaries.py`: `GlossaryStore` com persistência em JSON (`app/storage/glossaries/`). 5 endpoints REST (`POST/GET/PUT/DELETE /api/glossaries`). UI: dropdown para selecionar glossário + modal para criar/remover glossários com textarea `origem = destino`.
 
-#### Fase 2 — robustez
-- [ ] **Suite de testes pré-produção** — baixar ~10 PDFs variados (relatórios, artigos, manuais, formulários) da internet e rodar no app antes de ir à produção. Validar edge cases reais: multi-coluna, tabelas complexas, fontes exóticas, PDFs grandes.
-- [ ] **Detecção de PDF escaneado** — pré-análise antes de traduzir: bloquear na API com mensagem clara se PDF for raster/imagem (sem texto extraível). OCR Tesseract como opção futura.
-- [ ] **Recuperação de jobs** — job persiste mesmo se usuário fechar o browser; histórico de jobs acessível; arquivo fica disponível por X horas após conclusão.
+#### Fase 2 — robustez (ordem corrigida após discussão Sessão #9)
+- [ ] **P1: Suite de testes pré-produção** — baixar 8-12 PDFs variados (relatórios públicos, artigos científicos, manuais técnicos, formulários, faturas, contratos) e rodar no pipeline com Google Translate real. Catalogar TODAS as falhas observadas. Este passo é o que vai mostrar o que ainda quebra em PDF nativo — sem ele, qualquer afirmação de "está pronto" é otimismo.
+- [ ] **P2: Corrigir falhas catalogadas** — provável foco:
+  - ~~`grouper.py`: heurística para detectar quando duas células adjacentes coladas foram combinadas em UM TextBlock~~ — ✅ Sessão #10.
+  - `writer.py`: tratamento para glifos ausentes na NotoSans (bullets como ❑ que viram □).
+  - `writer.py`: comportamento defensivo quando `insert_textbox` falha mesmo em 6pt (célula muito estreita).
+  - `writer.py`: estratégia para tabelas sem bordas visíveis.
+  - `writer.py` ou novo módulo `toc.py`: tratamento de sumário (TOC) — detectar padrão "título + dots + número de página" e regerar dots para preencher exatamente o espaço calculado entre título traduzido e número da página.
+  - Cada correção com teste unitário travando regressão.
+- [ ] **P3: Recuperação de jobs** — job persiste mesmo se usuário fechar o browser; histórico de jobs acessível; arquivo fica disponível por X horas após conclusão.
 - [ ] Comparação visual lado-a-lado (antes/depois por página)
 - [ ] Suporte a múltiplos pares de idioma testados
+
+**Detecção de PDF escaneado: NÃO está na Fase 2.** Decisão do Miguel (Sessão #9): só implementar depois do site estar rodando em produção. Movido para Fase 4 (PDFs escaneados / OCR), tratado como evolução de produto.
 
 #### Fase 3 — produto
 - [ ] Decidir entre Caminho A (web app self-service), B (SaaS B2B) ou C (ferramenta + serviço)
@@ -299,7 +322,30 @@ com separadores) sao retornados intactos. Ex: 109004798-001-SITE-F-0414, REV-01,
 
 === PROXIMO PASSO SUGERIDO ===
 
-Fase 1 totalmente fechada. Iniciar Fase 2 — robustez para producao.
+ATENCAO: Os 5 problemas do briefing estao resolvidos no basico, mas PDF nativo
+NAO esta 100% pronto pra producao. PDF escaneado fica para DEPOIS do site
+estar rodando em producao (decisao explicita do Miguel) -- nao implementar
+agora.
+
+ORDEM CORRETA da Fase 2:
+
+1. PRIORIDADE 1 - Suite de testes pre-producao com PDFs variados da internet.
+   Baixar 8-12 PDFs diversos (relatorios publicos, artigos cientificos,
+   manuais tecnicos, formularios, faturas, contratos). Rodar no pipeline com
+   Google Translate real. Catalogar falhas. Esse e o passo que vai expor o
+   que ainda quebra.
+
+2. PRIORIDADE 2 - Corrigir falhas catalogadas. Cada correcao precisa de teste
+   unitario travando regressao. Areas provaveis:
+   - grouper.py: combinacao de celulas adjacentes em um TextBlock
+   - writer.py: glifos ausentes (caracteres especiais como bullets □)
+   - writer.py: insert_textbox falhando em celulas muito estreitas
+   - writer.py: tabelas sem bordas visiveis
+
+3. PRIORIDADE 3 - Recuperacao de jobs (persistencia alem do browser, historico,
+   expiracao). UX importante para PDFs grandes que demoram.
+
+Deteccao de PDF escaneado -> Fase 4, so depois do site estar rodando.
 1. Deteccao de PDF escaneado: pre-analise antes de aceitar o job; se nao houver
    texto extraivel (raster/imagem), retornar erro amigavel via API.
 2. Suite de testes pre-producao: baixar 8-12 PDFs variados (relatorios, artigos,
@@ -314,6 +360,27 @@ Estado detalhado: PROGRESSO.md (o arquivo que voce acabou de ler)
 ---
 
 ## Histórico de sessões
+
+### Sessão #10 — 2026-05-25 (Opus)
+
+**Limitação 1 resolvida: grouper agora detecta células adjacentes via bordas verticais.**
+
+Motivação: validação real do PDF traduzido mostrou "Distribuição: Novo Nordisk - E AFRY BR - E" atravessando bordas. Inspeção do bloco 32 do `document_pdf (1).pdf` revelou que os 3 spans (`"Distribution: "`, `"Novo Nordisk - E "`, `"AFRY BR - E "`) estavam no mesmo y com gaps de 12.5pt e 10.4pt — abaixo do threshold do grouper (1.5 × 9pt = 13.5pt). MAS havia bordas verticais detectadas em x=206.5 e x=277.4, exatamente entre os spans. O grouper antigo ignorava essas bordas e juntava tudo em um TextBlock.
+
+Solução implementada:
+- **`src/grouper.py`** — `_split_by_columns(spans, v_lines=None)`: novo parâmetro opcional. Sinal B (borda vertical) adicionado: se há borda em `(prev.x1, curr.x0)` estritamente, split mesmo com gap pequeno. `group_into_blocks(spans, v_lines_by_page=None)`: propaga v_lines por página. Compatibilidade total com chamadas sem v_lines (comportamento legacy preservado).
+- **`src/pipeline.py`** — calcula `v_lines_by_page` via `_get_page_vertical_lines` (já existia em writer.py) antes de chamar o grouper. Custo: O(drawings) por página, executado uma vez por PDF.
+
+Testes (`tests/test_grouper_borders.py`): 9 casos novos cobrindo compatibilidade legacy, borda no gap (split), borda fora do gap (não split), bordas estritamente nos limites, caso real AFRY com 3 células, paragrafo multi-linha com borda (não split), propagação por página, isolamento entre páginas. **9/9 passando.**
+
+Validação com PDF real `document_pdf (1).pdf` (25 págs):
+- Antes: 1119 TextBlocks; bloco 32 = `"Distribution: Novo Nordisk - E AFRY BR - E"` em UM bloco.
+- Depois: 1136 TextBlocks (+17 casos similares detectados); bloco 32 = 3 sub-blocos separados.
+- Render visual da capa: rodapé AFRY com células `"Distribuicao:"` | `"Novo Nordisk - E"` | `"AFRY BR - E"` respeitando bordas. Resto do layout intacto.
+
+Genericidade auditada: não detecta "tabela" ou "AFRY"; usa apenas geometria de spans + bordas verticais do PDF original. Funciona em qualquer PDF nativo com layout tabular bordado, mesmo com células adjacentes coladas.
+
+Próximo: atacar mais alguma das 4 limitações restantes (glifos ausentes, célula estreita, tabelas sem bordas, suite de testes) ou abrir P1 (suite de testes com PDFs variados).
 
 ### Sessão #9 — 2026-05-24 (Opus)
 
@@ -339,7 +406,10 @@ Caso residual identificado mas **fora do escopo da Sessão #9** (escopo do `grou
 
 Genericidade auditada: o refinamento usa apenas estruturas que o PyMuPDF já extrai (bordas via `page.get_drawings`). Funciona em qualquer PDF nativo com tabela bordada — tabelas, multi-coluna, formulários, RFQs, jornais, etc.
 
-Próximo: Fase 2 (detecção de PDF escaneado, suite de testes pré-produção, recuperação de jobs).
+Próximo: Fase 2.
+
+**Discussão final da Sessão #9 (Miguel questionou priorização):**
+Miguel observou corretamente que pular para "PDF escaneado" como P1 da Fase 2 seria prematuro — PDF nativo ainda tem limitações conhecidas que não foram endereçadas. Reordenei prioridades: P1 = suite de testes com PDFs variados da internet (catalogar falhas reais), P2 = corrigir, P3 = recuperação de jobs, P4 = PDF escaneado. As 5 limitações conhecidas em PDF nativo estão documentadas na seção "Onde estamos agora" para guiar a próxima sessão.
 
 ### Sessão #8 — 2026-05-24 (Opus)
 
